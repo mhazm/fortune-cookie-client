@@ -357,6 +357,21 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - Modal Reader pop-up (`Nismara Gazette`) di dalam aplikasi untuk membaca artikel lengkap tanpa harus keluar dari aplikasi.
    - Integrasi tombol `Buka di Web` dengan `@tauri-apps/plugin-opener` (`openUrl`) untuk membuka tautan di browser default sistem.
 
+### Phase 12: Penggantian Tab Map Menjadi Events & Agregasi Multi-Koleksi MongoDB
+1. **Agregasi Multi-Koleksi MongoDB di Backend (`/api/tracker/events`)**:
+   - Penggantian placeholder tab Map di desktop companion dengan pusat informasi kegiatan VTC (**Events**).
+   - Backend `nismara-tracker-server` mengagregasi 4 koleksi MongoDB:
+     - `contracts`: Kontrak pengiriman khusus perusahaan (*Special Contract*), kalkulasi akumulasi muatan, jarak, dan reward NC.
+     - `coupons`: Kupon hadiah & tiket penalty/NC reward bagi driver (`codeCoupon`), batas klaim, dan tanggal kedaluwarsa.
+     - `giveaways`: Quest berhadiah & undian tiket berhadiah dengan rincian tier hadiah serta daftar tugas/syarat.
+     - `ncevents`: Event pengali koin NC resmi komunitas (*Multiplier Boost Event*).
+   - Format respons terstandarisasi dengan endpoint `GET /api/tracker/events` yang menyajikan ringkasan metrik statistik serta timeline feed kronologis.
+2. **Antarmuka Interaktif Tab Events di Nismara Companion Desktop App**:
+   - Ikon navigasi `Trophy` menggantikan `MapIcon` pada sidebar desktop app.
+   - Filter pills kategori (`Semua`, `Kontrak`, `Kupon Hadiah`, `Giveaway Quest`, `NC Boost`).
+   - Kartu event responsif dengan banner visual, badge status (`Aktif`, `Selesai`, `Terjadwal`), countdown/tanggal berakhir, dan preview spesifik (tombol salin kode kupon sekali-klik dengan feedback `Tersalin!`, ringkasan quest giveaway, dan statistik muatan kontrak).
+   - Modal inspektor mendalam (*Event Detail Modal*) untuk melihat seluruh detail kontrak, rincian quest giveaway & tier hadiah, serta syarat partisipasi.
+
 ---
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)

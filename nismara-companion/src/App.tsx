@@ -6,7 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   LayoutGrid,
   Newspaper,
-  Map as MapIcon,
+  Trophy,
   Settings as SettingsIcon,
   Headphones,
   CheckCircle2,
@@ -27,6 +27,9 @@ import {
   Calendar,
   User,
   BookOpen,
+  Gift,
+  Copy,
+  Check,
 } from "lucide-react";
 
 interface GameInfo {
@@ -131,9 +134,83 @@ function getCategoryColor(category?: string): string {
   return "bg-sky-500/20 text-sky-300 border-sky-500/30";
 }
 
+interface EventQuest {
+  questId: string;
+  title: string;
+  description: string;
+  type: string;
+  target: number;
+  rewardTickets: number;
+}
+
+interface EventPrize {
+  tier: number;
+  tierTitle: string;
+  winnerCount?: number;
+  rewards: Array<{
+    type: string;
+    title: string;
+    amount?: number;
+  }>;
+}
+
+interface EventFeedItem {
+  id: string;
+  type: "CONTRACT" | "COUPON" | "GIVEAWAY" | "NC_EVENT";
+  typeLabel: string;
+  title: string;
+  description?: string;
+  company?: string;
+  couponCode?: string;
+  rewardType?: string;
+  minAmount?: number;
+  maxAmount?: number;
+  multiplierText?: string;
+  multiplierValue?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  drawDate?: string | null;
+  status?: string;
+  isActive: boolean;
+  isScheduled?: boolean;
+  imageUrl?: string | null;
+  badgeColor: string;
+  claimsCount?: number;
+  participantsCount?: number;
+  ticketPriceNC?: number;
+  stats?: {
+    completedContracts?: number;
+    totalNCEarned?: number;
+    totalDistanceKm?: number;
+    totalMassTons?: number;
+    contributorsCount?: number;
+  };
+  quests?: EventQuest[];
+  prizes?: EventPrize[];
+}
+
+interface EventsApiResponse {
+  success: boolean;
+  summary: {
+    totalEvents: number;
+    activeCount: number;
+    contractsCount: number;
+    couponsCount: number;
+    giveawaysCount: number;
+    nceventsCount: number;
+  };
+  data: {
+    feed: EventFeedItem[];
+    contracts: EventFeedItem[];
+    coupons: EventFeedItem[];
+    giveaways: EventFeedItem[];
+    ncevents: EventFeedItem[];
+  };
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<
-    "games" | "news" | "map" | "settings"
+    "games" | "news" | "events" | "settings"
   >("games");
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
@@ -149,6 +226,14 @@ export default function App() {
   const [newsError, setNewsError] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [readingArticle, setReadingArticle] = useState<SanityArticle | null>(null);
+
+  // Events from Tracker Server (contracts, coupons, giveaways, ncevents)
+  const [eventsFeed, setEventsFeed] = useState<EventFeedItem[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+  const [selectedEventType, setSelectedEventType] = useState<string>("ALL");
+  const [selectedEventDetail, setSelectedEventDetail] = useState<EventFeedItem | null>(null);
+  const [copiedCouponCode, setCopiedCouponCode] = useState<string | null>(null);
 
   // Auto-Updater & Version Enforcement State
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -398,6 +483,57 @@ export default function App() {
     );
   }, [articles, selectedCategory]);
 
+  // Fetch Events from Tracker Server (Contracts, Coupons, Giveaways, NC Events)
+  const fetchTrackerEvents = async () => {
+    setEventsLoading(true);
+    setEventsError(null);
+    try {
+      const base = serverUrl.trim() || "http://localhost:3100";
+      let res: Response | null = null;
+      try {
+        res = await fetch(`${base}/api/tracker/events`, {
+          headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
+        });
+      } catch (networkErr) {
+        if (base !== "http://localhost:3100") {
+          res = await fetch("http://localhost:3100/api/tracker/events");
+        } else {
+          throw networkErr;
+        }
+      }
+
+      if (!res || !res.ok) {
+        throw new Error(`Server status ${res?.status || 500}`);
+      }
+
+      const json: EventsApiResponse = await res.json();
+      if (json.success && json.data?.feed) {
+        setEventsFeed(json.data.feed);
+      } else {
+        setEventsError("Data event tidak tersedia.");
+      }
+    } catch (err: any) {
+      console.error("[Events] Failed to load events:", err);
+      setEventsError(
+        err?.message || "Gagal memuat event komunitas dari server.",
+      );
+    } finally {
+      setEventsLoading(false);
+    }
+  };
+
+  const filteredEvents = useMemo(() => {
+    if (selectedEventType === "ALL") return eventsFeed;
+    return eventsFeed.filter((e) => e.type === selectedEventType);
+  }, [eventsFeed, selectedEventType]);
+
+  const handleCopyCouponCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCouponCode(code);
+    notify(`Kode kupon "${code}" berhasil disalin!`);
+    setTimeout(() => setCopiedCouponCode(null), 3000);
+  };
+
   // Load saved config & perform initial startup checks
   useEffect(() => {
     invoke<PluginConfigPayload>("get_plugin_config")
@@ -426,8 +562,9 @@ export default function App() {
     checkForUpdates(false);
     // Auto-sync DLLs to games if games are closed
     handleAutoSyncPlugins(true);
-    // Fetch News from Sanity CMS
+    // Fetch News from Sanity CMS & Community Events from Server
     fetchSanityArticles();
+    fetchTrackerEvents();
   }, []);
 
   useEffect(() => {
@@ -576,17 +713,17 @@ export default function App() {
               <span className="text-[11px] font-medium">News</span>
             </button>
 
-            {/* Map */}
+            {/* Events */}
             <button
-              onClick={() => setActiveTab("map")}
+              onClick={() => setActiveTab("events")}
               className={`flex flex-col items-center justify-center w-full py-2.5 rounded-xl transition-all ${
-                activeTab === "map"
+                activeTab === "events"
                   ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-inner shadow-sky-500/10"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
               }`}
             >
-              <MapIcon className="w-5 h-5 mb-1" />
-              <span className="text-[11px] font-medium">Map</span>
+              <Trophy className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">Events</span>
             </button>
 
             {/* Settings */}
@@ -1147,20 +1284,286 @@ export default function App() {
           </div>
         )}
 
-        {/* VIEW: MAP */}
-        {activeTab === "map" && (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 mb-4">
-              <MapIcon className="w-8 h-8" />
+        {/* VIEW: EVENTS */}
+        {activeTab === "events" && (
+          <div className="flex-1 p-8 overflow-y-auto max-w-5xl mx-auto w-full">
+            <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Trophy className="w-6 h-6 text-amber-400" />
+                  <span>VTC Events, Contracts & Quests</span>
+                </h2>
+                <p className="text-sm text-slate-400 mt-1">
+                  Special Contracts, Giveaway berhadiah, pembagian kupon, dan
+                  NC Multiplier boost resmi Nismara.
+                </p>
+              </div>
+
+              {/* Refresh Button */}
+              <button
+                onClick={fetchTrackerEvents}
+                disabled={eventsLoading}
+                className="self-start md:self-auto px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    eventsLoading ? "animate-spin text-amber-400" : ""
+                  }`}
+                />
+                <span>{eventsLoading ? "Memuat..." : "Segarkan Event"}</span>
+              </button>
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">
-              Live Convoy Map
-            </h2>
-            <p className="text-sm text-slate-400 max-w-md">
-              Peta posisi real-time armada truk Nismara Transport di server
-              TruckersMP dan SCS Convoy akan segera hadir di pembaruan
-              berikutnya.
-            </p>
+
+            {/* Event Type Filter Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-6 scrollbar-none">
+              {[
+                { key: "ALL", label: "Semua Event" },
+                { key: "CONTRACT", label: "Special Contracts" },
+                { key: "GIVEAWAY", label: "Giveaway Quests" },
+                { key: "COUPON", label: "Kupon Hadiah" },
+                { key: "NC_EVENT", label: "NC Boost" },
+              ].map((tab) => (
+                <button
+                  key={tab.key}
+                  onClick={() => setSelectedEventType(tab.key)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                    selectedEventType === tab.key
+                      ? "bg-amber-500 text-slate-950 font-bold shadow-md shadow-amber-500/20"
+                      : "bg-slate-800/60 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700/50"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Error banner if any */}
+            {eventsError && (
+              <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{eventsError}</span>
+                </div>
+                <button
+                  onClick={fetchTrackerEvents}
+                  className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-bold rounded-lg cursor-pointer transition-all"
+                >
+                  Coba Lagi
+                </button>
+              </div>
+            )}
+
+            {/* Loading skeletons */}
+            {eventsLoading && eventsFeed.length === 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {[1, 2, 3, 4].map((i) => (
+                  <div
+                    key={i}
+                    className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 animate-pulse flex flex-col gap-3"
+                  >
+                    <div className="w-full h-40 rounded-xl bg-slate-800/70" />
+                    <div className="h-4 w-28 rounded bg-slate-800" />
+                    <div className="h-6 w-3/4 rounded bg-slate-800" />
+                    <div className="h-10 w-full rounded bg-slate-800/50" />
+                  </div>
+                ))}
+              </div>
+            ) : filteredEvents.length === 0 ? (
+              <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-800 text-slate-400">
+                <Trophy className="w-10 h-10 mx-auto mb-3 opacity-40 text-slate-500" />
+                <p className="text-sm">Tidak ada event dalam kategori ini.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {filteredEvents.map((item) => {
+                  return (
+                    <div
+                      key={item.id}
+                      className="group rounded-2xl bg-slate-900/70 border border-slate-800/90 hover:border-slate-700/80 hover:bg-slate-900/90 transition-all flex flex-col overflow-hidden backdrop-blur-sm shadow-lg shadow-black/20"
+                    >
+                      {/* Banner Image if available */}
+                      {item.imageUrl ? (
+                        <div className="relative w-full h-44 bg-slate-950 overflow-hidden">
+                          <img
+                            src={item.imageUrl}
+                            alt={item.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-black/20" />
+                          <div className="absolute top-3 left-3 flex items-center gap-1.5">
+                            <span
+                              className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border backdrop-blur-md ${item.badgeColor}`}
+                            >
+                              {item.typeLabel}
+                            </span>
+                            {item.isActive ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/80 text-white backdrop-blur-md flex items-center gap-1 shadow-sm">
+                                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                                AKTIF
+                              </span>
+                            ) : item.isScheduled ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-500/80 text-white backdrop-blur-md">
+                                TERJADWAL
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-700/80 text-slate-300 backdrop-blur-md">
+                                SELESAI
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-5 pb-0 flex items-center justify-between">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${item.badgeColor}`}
+                          >
+                            {item.typeLabel}
+                          </span>
+                          {item.isActive ? (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                              AKTIF
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-400">
+                              SELESAI
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="p-5 flex-1 flex flex-col justify-between gap-4">
+                        <div className="space-y-2.5">
+                          {/* Date Range */}
+                          <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                            <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                            <span>
+                              {formatNewsDate(item.startDate || "")}
+                              {item.endDate
+                                ? ` — ${formatNewsDate(item.endDate)}`
+                                : ""}
+                            </span>
+                          </div>
+
+                          {/* Title */}
+                          <h3 className="text-base font-bold text-white group-hover:text-amber-300 transition-colors">
+                            {item.title}
+                          </h3>
+
+                          {/* Description or Excerpt */}
+                          {item.description && (
+                            <p className="text-xs text-slate-300/90 leading-relaxed line-clamp-2">
+                              {item.description}
+                            </p>
+                          )}
+
+                          {/* Specific stats per event type */}
+                          {item.type === "CONTRACT" && item.stats && (
+                            <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-300 flex items-center justify-between">
+                              <span>
+                                Perusahaan:{" "}
+                                <strong className="text-white">
+                                  {item.company}
+                                </strong>
+                              </span>
+                              <span className="text-sky-400 font-semibold">
+                                {item.stats?.completedContracts ?? 0} Selesai
+                              </span>
+                            </div>
+                          )}
+
+                          {item.type === "COUPON" && item.couponCode && (
+                            <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between">
+                              <div className="text-xs">
+                                <span className="text-slate-400 block text-[10px]">
+                                  KODE KUPON:
+                                </span>
+                                <span className="font-mono font-bold text-amber-300 text-sm">
+                                  {item.couponCode}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() =>
+                                  handleCopyCouponCode(item.couponCode || "")
+                                }
+                                className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer"
+                              >
+                                {copiedCouponCode === item.couponCode ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span>Tersalin</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Salin</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          )}
+
+                          {item.type === "GIVEAWAY" && (
+                            <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/30 text-xs flex items-center justify-between">
+                              <span className="text-purple-300">
+                                🎯{" "}
+                                <strong>
+                                  {item.quests?.length || 0} Quest Tersedia
+                                </strong>
+                              </span>
+                              <span className="text-slate-400">
+                                {item.ticketPriceNC
+                                  ? `Tiket: ${item.ticketPriceNC.toLocaleString()} NC`
+                                  : "Quest Gratis"}
+                              </span>
+                            </div>
+                          )}
+
+                          {item.type === "NC_EVENT" && (
+                            <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs flex items-center justify-between">
+                              <span className="text-emerald-300 font-bold text-sm">
+                                ⚡ {item.multiplierText}
+                              </span>
+                              <span className="text-slate-400">
+                                {item.participantsCount} Driver Berpartisipasi
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Bottom Actions */}
+                        <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => setSelectedEventDetail(item)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-slate-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Rincian Event</span>
+                          </button>
+
+                          {item.type === "CONTRACT" && (
+                            <span className="text-[11px] text-slate-400">
+                              Total:{" "}
+                              <strong className="text-white">
+                                {item.stats?.totalNCEarned?.toLocaleString()} NC
+                              </strong>
+                            </span>
+                          )}
+
+                          {item.type === "COUPON" &&
+                            item.claimsCount !== undefined && (
+                              <span className="text-[11px] text-slate-400">
+                                {item.claimsCount} Driver Klaim
+                              </span>
+                            )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1799,6 +2202,304 @@ export default function App() {
                   <ExternalLink className="w-3.5 h-3.5" />
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EVENT DETAIL MODAL */}
+      {selectedEventDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl max-h-[85vh] rounded-2xl bg-slate-900 border border-slate-700/80 shadow-2xl text-slate-200 relative flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95 sticky top-0 z-10">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-amber-400" />
+                <span className="text-sm font-bold text-white uppercase tracking-wider">
+                  Rincian {selectedEventDetail.typeLabel}
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedEventDetail(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              {/* Cover Banner */}
+              {selectedEventDetail.imageUrl && (
+                <div className="w-full h-52 rounded-xl overflow-hidden bg-slate-950">
+                  <img
+                    src={selectedEventDetail.imageUrl}
+                    alt={selectedEventDetail.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              {/* Badges & Meta */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${selectedEventDetail.badgeColor}`}
+                  >
+                    {selectedEventDetail.typeLabel}
+                  </span>
+                  {selectedEventDetail.isActive ? (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      SEDANG BERLANGSUNG
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-800 text-slate-400">
+                      EVENT SELESAI
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1">
+                  <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                  <span>
+                    {formatNewsDate(selectedEventDetail.startDate || "")}
+                    {selectedEventDetail.endDate
+                      ? ` — ${formatNewsDate(selectedEventDetail.endDate)}`
+                      : ""}
+                  </span>
+                </div>
+              </div>
+
+              {/* Title */}
+              <h2 className="text-2xl font-bold text-white leading-snug">
+                {selectedEventDetail.title}
+              </h2>
+
+              {/* Description if any */}
+              {selectedEventDetail.description && (
+                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">
+                  {selectedEventDetail.description}
+                </p>
+              )}
+
+              {/* CONTRACT DETAIL STATS */}
+              {selectedEventDetail.type === "CONTRACT" &&
+                selectedEventDetail.stats && (
+                  <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+                    <h4 className="text-xs font-bold text-sky-400 uppercase tracking-wider">
+                      Statistik Kontrak Perusahaan
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80">
+                        <span className="block text-slate-400 text-[10px]">
+                          Total Kontrak
+                        </span>
+                        <span className="text-sm font-bold text-white">
+                          {selectedEventDetail.stats.completedContracts ?? 0} Selesai
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80">
+                        <span className="block text-slate-400 text-[10px]">
+                          Total Jarak
+                        </span>
+                        <span className="text-sm font-bold text-white">
+                          {(selectedEventDetail.stats.totalDistanceKm ?? 0).toLocaleString()}{" "}
+                          km
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80">
+                        <span className="block text-slate-400 text-[10px]">
+                          Total Muatan
+                        </span>
+                        <span className="text-sm font-bold text-white">
+                          {(selectedEventDetail.stats.totalMassTons ?? 0).toLocaleString()}{" "}
+                          Ton
+                        </span>
+                      </div>
+                      <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800/80">
+                        <span className="block text-slate-400 text-[10px]">
+                          Total NC Diperoleh
+                        </span>
+                        <span className="text-sm font-bold text-emerald-400">
+                          {(selectedEventDetail.stats.totalNCEarned ?? 0).toLocaleString()}{" "}
+                          NC
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+              {/* COUPON DETAIL */}
+              {selectedEventDetail.type === "COUPON" &&
+                selectedEventDetail.couponCode && (
+                  <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+                    <span className="text-xs font-bold text-amber-300 uppercase tracking-wider block">
+                      Kupon Klaim Driver
+                    </span>
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-slate-950/80 border border-amber-500/20">
+                      <div>
+                        <span className="text-slate-400 text-[10px] block">
+                          KODE KUPON:
+                        </span>
+                        <span className="text-lg font-mono font-bold text-amber-300">
+                          {selectedEventDetail.couponCode}
+                        </span>
+                      </div>
+                      <button
+                        onClick={() =>
+                          handleCopyCouponCode(
+                            selectedEventDetail.couponCode || "",
+                          )
+                        }
+                        className="px-3.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        {copiedCouponCode ===
+                        selectedEventDetail.couponCode ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span>Tersalin ke Clipboard</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Salin Kode Kupon</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <div className="text-xs text-slate-300 flex items-center justify-between">
+                      <span>
+                        Hadiah:{" "}
+                        <strong>
+                          {selectedEventDetail.rewardType ===
+                          "PENALTY_TICKET"
+                            ? "Tiket Hapus Penalti"
+                            : "Nismara Coin (NC)"}
+                        </strong>
+                      </span>
+                      <span>
+                        Total Klaim:{" "}
+                        <strong>
+                          {selectedEventDetail.claimsCount || 0} Driver
+                        </strong>
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+              {/* GIVEAWAY QUESTS & PRIZES */}
+              {selectedEventDetail.type === "GIVEAWAY" && (
+                <div className="space-y-4">
+                  {/* Quests List */}
+                  {selectedEventDetail.quests &&
+                    selectedEventDetail.quests.length > 0 && (
+                      <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+                        <h4 className="text-xs font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <Trophy className="w-3.5 h-3.5 text-purple-400" />
+                          <span>Misi / Quests untuk Mendapatkan Tiket</span>
+                        </h4>
+                        <div className="space-y-2">
+                          {selectedEventDetail.quests.map((q, idx) => (
+                            <div
+                              key={idx}
+                              className="p-3 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-between gap-3 text-xs"
+                            >
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-white block">
+                                  {q.title}
+                                </span>
+                                <span className="text-slate-400 block">
+                                  {q.description}
+                                </span>
+                              </div>
+                              <span className="px-2.5 py-1 rounded-md bg-purple-500/20 text-purple-300 font-bold border border-purple-500/30 shrink-0">
+                                +{q.rewardTickets} Tiket
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {/* Prizes List */}
+                  {selectedEventDetail.prizes &&
+                    selectedEventDetail.prizes.length > 0 && (
+                      <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 space-y-3">
+                        <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <Gift className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Kolam Hadiah & Juara (Prize Pool)</span>
+                        </h4>
+                        <div className="space-y-2">
+                          {selectedEventDetail.prizes.map((p, idx) => (
+                            <div
+                              key={idx}
+                              className="p-3 rounded-lg bg-slate-900 border border-slate-800 space-y-1.5 text-xs"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-amber-300">
+                                  {p.tierTitle}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  {p.winnerCount || 1} Pemenang
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 pt-1">
+                                {p.rewards.map((r, rIdx) => (
+                                  <span
+                                    key={rIdx}
+                                    className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700/80 text-[11px] text-slate-200"
+                                  >
+                                    🎁 {r.title}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                </div>
+              )}
+
+              {/* NC EVENT DETAIL */}
+              {selectedEventDetail.type === "NC_EVENT" && (
+                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 space-y-2 text-xs">
+                  <span className="text-emerald-300 font-bold block text-sm">
+                    Pengali Bonus NC: {selectedEventDetail.multiplierText}
+                  </span>
+                  <p className="text-slate-300">
+                    Selama event berlangsung, setiap pekerjaan yang diselesaikan
+                    otomatis mendapatkan bonus pendapatan Nismara Coin berlipat
+                    ganda!
+                  </p>
+                  <div className="pt-2 text-slate-400 flex items-center justify-between">
+                    <span>
+                      Partisipasi:{" "}
+                      <strong>
+                        {selectedEventDetail.participantsCount || 0} Driver
+                      </strong>
+                    </span>
+                    <span>
+                      Status:{" "}
+                      <strong>
+                        {selectedEventDetail.isActive ? "Aktif" : "Selesai"}
+                      </strong>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <span>Nismara Transport Logistics Events</span>
+              <button
+                onClick={() => setSelectedEventDetail(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold transition-all cursor-pointer"
+              >
+                Tutup
+              </button>
             </div>
           </div>
         </div>
