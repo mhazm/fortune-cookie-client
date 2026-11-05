@@ -13,6 +13,12 @@
       "skillPath": "skills/git-commit/SKILL.md",
       "computedHash": "78b6a33700091345cd449f9e3642ddd611b479b341efc9d6c750f7e04d15216a"
     },
+    "git-workflow-and-versioning": {
+      "source": "addyosmani/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/git-workflow-and-versioning/SKILL.md",
+      "computedHash": "620a972a0163372c263bf3cd31e9766573353b6d93210ff34812e83c300fba89"
+    },
     "tauri": {
       "source": "full-stack-skills/tauri-skills",
       "sourceType": "github",

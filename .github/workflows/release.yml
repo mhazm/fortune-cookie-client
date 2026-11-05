@@ -60,6 +60,15 @@ jobs:
         with:
           workspaces: 'nismara-companion/src-tauri -> target'
 
+      # Ensure companion resources folder and placeholder DLL exist across all platforms
+      - name: Prepare Companion resources directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "nismara-companion/resources"
+          if (!(Test-Path "nismara-companion/resources/NismaraTracker.dll")) {
+            New-Item -ItemType File -Force -Path "nismara-companion/resources/NismaraTracker.dll"
+          }
+
       # Linux-specific build dependencies for Tauri v2
       - name: Install Linux system dependencies
         if: matrix.platform == 'ubuntu-22.04'
@@ -83,7 +92,12 @@ jobs:
         run: |
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
-          Copy-Item -Path "bin\NismaraTracker.dll" -Destination "nismara-companion\resources\NismaraTracker.dll" -Force
+          New-Item -ItemType Directory -Force -Path "nismara-companion/resources"
+          if (Test-Path "bin/Release/NismaraTracker.dll") {
+            Copy-Item -Path "bin/Release/NismaraTracker.dll" -Destination "nismara-companion/resources/NismaraTracker.dll" -Force
+          } elseif (Test-Path "bin/NismaraTracker.dll") {
+            Copy-Item -Path "bin/NismaraTracker.dll" -Destination "nismara-companion/resources/NismaraTracker.dll" -Force
+          }
           Write-Host "Successfully compiled NismaraTracker.dll and copied to resources."
 
       - name: Install frontend dependencies
@@ -121,7 +135,11 @@ jobs:
         shell: pwsh
         run: |
           $tag = if ($env:GITHUB_REF_NAME) { $env:GITHUB_REF_NAME } else { "${{ inputs.release_tag }}" }
-          if (Test-Path "bin\NismaraTracker.dll") {
+          if (Test-Path "bin/Release/NismaraTracker.dll") {
+            gh release upload "$tag" "bin/Release/NismaraTracker.dll" --clobber
+            Write-Host "Uploaded standalone NismaraTracker.dll to release $tag"
+          } elseif (Test-Path "bin/NismaraTracker.dll") {
             gh release upload "$tag" "bin/NismaraTracker.dll" --clobber
             Write-Host "Uploaded standalone NismaraTracker.dll to release $tag"
           }
+
