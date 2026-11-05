@@ -737,7 +737,7 @@ SCSAPI_VOID OnTelemetryConfiguration(
                 s.job_accum_cargo_damage = s.cargo_damage;
 
                 should_post_start = true;
-                start_req.game_id = (s.game_id == "ats") ? "2" : "1";
+                start_req.game_id = (s.game_id == "ats" || s.game_id == "amtrucks") ? "2" : "1";
                 start_req.game_mode = MapServerModeToGameMode(s.server_mode);
                 start_req.market_type = market;
                 start_req.source_city = src_city;
@@ -838,7 +838,7 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
 
         nismara::core::TelemetryState::Instance().Write([&](nismara::core::TelemetrySnapshot& s) {
             comp_req.job_id = s.active_job_db_id;
-            comp_req.game_id = (s.game_id == "ats") ? "2" : "1";
+            comp_req.game_id = (s.game_id == "ats" || s.game_id == "amtrucks") ? "2" : "1";
             comp_req.game_mode = MapServerModeToGameMode(s.server_mode);
 
             uint32_t driven_km = 0;
@@ -902,7 +902,7 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
         nismara::core::JobCancelRequest cancel_req{};
         nismara::core::TelemetryState::Instance().Write([&](nismara::core::TelemetrySnapshot& s) {
             cancel_req.job_id = s.active_job_db_id;
-            cancel_req.game_id = (s.game_id == "ats") ? "2" : "1";
+            cancel_req.game_id = (s.game_id == "ats" || s.game_id == "amtrucks") ? "2" : "1";
             s.job_active = false;
             s.last_job_status = "Contract Aborted (job_cancelled)";
         });
