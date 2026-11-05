@@ -114,7 +114,7 @@ nismara-tracker-server/
     │   ├── me.routes.js                 # GET & POST /api/tracker/me (sinkronisasi profil, wallet, fleet, garage, ongoingJob)
     │   └── jobs.routes.js               # POST /api/tracker/jobs/start, /complete, /cancel
     └── services/
-        └── jobProcessor.js              # Kalkulasi finansial job, cap +10% plannedDistanceKm, update wallet/exp/fleet
+        └── jobProcessor.js              # Kalkulasi finansial job, cap +25% plannedDistanceKm, update wallet/exp/fleet
 ```
 
 ---
@@ -189,9 +189,9 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 3. **Perhitungan Damage Akumulatif (Anti-Repair Reset)**:
    - Selama job berlangsung (`job_active == true`), setiap kenaikan wear pada 5 komponen truk (`engine`, `transmission`, `cabin`, `chassis`, `wheels`) serta `trailer` dan `cargo` diakumulasikan ke variabel `job_accum_*` (`src/core/scs_callbacks.cpp`).
    - Jika driver melakukan **repair di bengkel di tengah perjalanan**, nilai wear di game memang turun ke `0`, namun `job_accum_*` **TIDAK di-reset**. Jika setelah repair driver menabrak lagi, kenaikan damage baru langsung ditambahkan ke akumulasi sebelumnya.
-4. **Pembatasan Jarak Maksimum `+10%` (`plannedDistanceKm` Cap)**:
-   - Untuk mencegah eksploitasi *distance farming* (mengambil job jarak pendek lalu berputar-putar agar mendapat NC besar), baik di plugin (`src/core/scs_callbacks.cpp`) maupun di backend (`src/services/jobProcessor.js`), parameter `distanceKm` dibatasi maksimum **`110%` (`+10%`) dari `plannedDistanceKm`**:
-     $$\text{effectiveDistanceKm} = \min\left(\text{drivenKm},\ \text{round}(\text{plannedDistanceKm} \times 1.10)\right)$$
+4. **Pembatasan Jarak Maksimum `+25%` (`plannedDistanceKm` Cap)**:
+   - Untuk mencegah eksploitasi *distance farming* (mengambil job jarak pendek lalu berputar-putar agar mendapat NC besar), baik di plugin (`src/core/scs_callbacks.cpp`) maupun di backend (`src/services/jobProcessor.js`), parameter `distanceKm` dibatasi maksimum **`125%` (`+25%`) dari `plannedDistanceKm`**:
+     $$\text{effectiveDistanceKm} = \min\left(\text{drivenKm},\ \text{round}(\text{plannedDistanceKm} \times 1.25)\right)$$
 
 ### Phase 6: Aplikasi Penalty Points, Safebox Tickets & Diskon Kumulatif
 1. **Aplikasi Penalty Points (`PhoneAppId::PenaltyPoints`)**:
@@ -221,7 +221,7 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - Tombol navigasi atas berganti dinamis menjadi `< Garage` dan judul menjadi `Vehicle Detail`.
 3. **Job (`RenderAppDispatch`)**:
    - Sub-tab: `Waybill Rute` & `Slip Paycheck`.
-   - `Waybill Rute`: Menampilkan visual rute timeline (Origin $\rightarrow$ Destination) dengan indikator panah, jarak rencana, sisa navigasi real-time, manifest kargo, kuota cap jarak (+10%), serta akumulasi kerusakan dan statistik kecepatan.
+   - `Waybill Rute`: Menampilkan visual rute timeline (Origin $\rightarrow$ Destination) dengan indikator panah, jarak rencana, sisa navigasi real-time, manifest kargo, kuota cap jarak (+25%), serta akumulasi kerusakan dan statistik kecepatan.
    - `Slip Paycheck`: Menampilkan invoice/paystub digital resmi pekerjaan terakhir lengkap dengan pendapatan bersih NC, bonus multiplayer, hardcore parking, potongan pajak, service, dan denda poin penalti.
 4. **Nismara ID (`RenderAppNismaraId`)**:
    - Desain **Apple Wallet Holographic Pass** dengan barcode digital prosedural, Discord ID, SteamID64, Trucky Role/Rank emblem dengan warna badge resmi.
@@ -370,7 +370,7 @@ Jalankan perintah berikut dari direktori `d:\Project\Nismara Transport\Project\n
 - **DO**: Selalu gunakan komunikasi HTTP asynchronous di thread terpisah (`ApiClient`) untuk seluruh request jaringan dari C++. Jangan pernah melakukan jaringan sinkron di dalam thread DirectX `Present` atau callback SCS SDK.
 - **DO**: Pastikan setiap modifikasi UI di `src/ui/tablet_gui.cpp` tetap berada di dalam batas layar OLED iPhone 16 (`screen_min` hingga `screen_max`) dan sebelum pemanggilan `RenderPhoneBezelOverlay` agar tidak ada elemen visual yang bocor keluar dari bezel HP.
 - **DO**: Gunakan `String(user.discordId)` dan `guildId: "863959415702028318"` saat melakukan query ke koleksi `currencies` dan `points`, serta `ObjectId(user._id)` saat melakukan query ke koleksi `fleets` dan `garages`.
-- **DO**: Pertahankan mekanisme akumulasi damage (`job_accum_*`) dan batas maksimum jarak tempuh `+10%` dari `plannedDistanceKm` baik di sisi client C++ maupun di sisi server Node.js.
+- **DO**: Pertahankan mekanisme akumulasi damage (`job_accum_*`) dan batas maksimum jarak tempuh `+25%` dari `plannedDistanceKm` baik di sisi client C++ maupun di sisi server Node.js.
 - **DO**: Jika memperbarui aset logo dari file SVG, gunakan skrip rasterisasi supersampling (seperti yang menghasilkan `include/ui/nismara_logo_data.hpp`) agar kurva bezier dan `fill-rule="evenodd"` tetap tajam tanpa artefak.
 
 ### DON'T (Yang Dilarang Dilakukan)

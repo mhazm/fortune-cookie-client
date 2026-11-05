@@ -850,10 +850,10 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
                 driven_km = s.planned_distance_km;
             }
 
-            // Cap driven distance to at most +10% of planned_distance_km
+            // Cap driven distance to at most +25% of planned_distance_km
             if (s.planned_distance_km > 0) {
                 const uint32_t max_allowed_km =
-                    std::max(1u, static_cast<uint32_t>(std::round(static_cast<float>(s.planned_distance_km) * 1.10f)));
+                    std::max(1u, static_cast<uint32_t>(std::round(static_cast<float>(s.planned_distance_km) * 1.25f)));
                 if (driven_km > max_allowed_km) {
                     driven_km = max_allowed_km;
                 }

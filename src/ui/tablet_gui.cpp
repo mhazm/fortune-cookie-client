@@ -2308,10 +2308,10 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
             ImGui::PopFont();
 
             ImGui::Text("Muatan: %.1f Ton  |  Pasar: %s", snap.cargo_mass_kg / 1000.0f, snap.job_market.c_str());
-            const uint32_t max_cap_km = static_cast<uint32_t>(std::round(static_cast<float>(snap.planned_distance_km) * 1.10f));
+            const uint32_t max_cap_km = static_cast<uint32_t>(std::round(static_cast<float>(snap.planned_distance_km) * 1.25f));
             ImGui::TextColored(
                 ImVec4(0.98f, 0.80f, 0.08f, 1.0f),
-                "Tarif: %.2f NC/km  |  Maks Cap: %u km (+10%%)",
+                "Tarif: %.2f NC/km  |  Maks Cap: %u km (+25%%)",
                 snap.active_job_locked_price,
                 max_cap_km);
 
