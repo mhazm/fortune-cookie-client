@@ -47,6 +47,7 @@ set(NISMARA_SOURCES
     src/core/config_manager.cpp
     src/core/api_client.cpp
     src/core/server_detector.cpp
+    src/core/profile_validator.cpp
     src/core/scs_callbacks.cpp
     src/hooks/dx11_hook.cpp
     src/hooks/wndproc_hook.cpp

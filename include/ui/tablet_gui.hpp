@@ -151,7 +151,9 @@ private:
         const nismara::core::TelemetrySnapshot& snap,
         const nismara::core::DriverAccountProfile& account);
     void RenderAppWallpapers(const nismara::core::DriverAccountProfile& account);
-    void RenderAppSettings(const nismara::core::DriverAccountProfile& account);
+    void RenderAppSettings(
+        const nismara::core::TelemetrySnapshot& snap,
+        const nismara::core::DriverAccountProfile& account);
     void RenderFleetDetailInspector(
         const nismara::core::DriverFleetVehicle& fl,
         const nismara::core::TelemetrySnapshot& snap,

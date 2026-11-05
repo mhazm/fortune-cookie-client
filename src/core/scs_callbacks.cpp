@@ -2,12 +2,14 @@
 #include "core/api_client.hpp"
 #include "core/companion_gate.hpp"
 #include "core/config_manager.hpp"
+#include "core/profile_validator.hpp"
 #include "core/server_detector.hpp"
 #include "core/telemetry_state.hpp"
 #include "hooks/dx11_hook.hpp"
 
 #include <windows.h>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -142,11 +144,24 @@ SCSAPI_VOID OnChannelSpeed(
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
     const float mps = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
-    nismara::core::TelemetryState::Instance().Write([mps](nismara::core::TelemetrySnapshot& s) {
+    static auto last_speed_sample = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const float dt = std::chrono::duration<float>(now - last_speed_sample).count();
+    last_speed_sample = now;
+
+    nismara::core::TelemetryState::Instance().Write([mps, dt](nismara::core::TelemetrySnapshot& s) {
         s.speed_mps = mps;
         s.speed_kmh = std::fabs(mps) * 3.6f;
-        if (s.job_active && s.speed_kmh > s.job_max_speed_kmh) {
-            s.job_max_speed_kmh = s.speed_kmh;
+        if (s.job_active) {
+            if (s.speed_kmh > s.job_max_speed_kmh) {
+                s.job_max_speed_kmh = s.speed_kmh;
+            }
+            // Hardcore speeding check: road limit > 40 km/h, tolerance 5 km/h
+            if (s.speed_limit_kmh > 40.0f && s.speed_kmh > (s.speed_limit_kmh + 5.0f)) {
+                if (dt > 0.0f && dt < 1.0f) {
+                    s.hardcore_speeding_seconds += dt;
+                }
+            }
         }
     });
 }
@@ -533,8 +548,37 @@ SCSAPI_VOID OnChannelGameTime(
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
     const uint32_t game_time = (value && value->type == SCS_VALUE_TYPE_u32) ? value->value_u32.value : 0;
-    nismara::core::TelemetryState::Instance().Write([game_time](nismara::core::TelemetrySnapshot& s) {
+    static auto last_time_sample = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+    const float dt_wall = std::chrono::duration<float>(now - last_time_sample).count();
+    last_time_sample = now;
+
+    nismara::core::TelemetryState::Instance().Write([game_time, dt_wall](nismara::core::TelemetrySnapshot& s) {
+        if (s.job_active && dt_wall >= 1.0f && s.game_time_minutes > 0 && game_time > s.game_time_minutes && !s.is_paused) {
+            const float dt_game_sec = static_cast<float>(game_time - s.game_time_minutes) * 60.0f;
+            const float time_ratio = dt_game_sec / dt_wall;
+            // Normal ETS2/ATS time scale is 1:19 on highway, 1:3 in cities. Warp cheat or speedhack is > 25.0
+            if (time_ratio > 26.0f) {
+                s.hardcore_warp_detected = true;
+            }
+        }
         s.game_time_minutes = game_time;
+    });
+}
+
+SCSAPI_VOID OnChannelNextRestStop(
+    const scs_string_t /*name*/,
+    const scs_u32_t /*index*/,
+    const scs_value_t* const value,
+    const scs_context_t /*context*/) {
+    const int32_t rest_min = (value && value->type == SCS_VALUE_TYPE_s32) ? value->value_s32.value : 0;
+    nismara::core::TelemetryState::Instance().Write([rest_min](nismara::core::TelemetrySnapshot& s) {
+        if (s.job_active && rest_min < 0) {
+            const int32_t overdue = -rest_min;
+            if (overdue > 30) {
+                s.hardcore_rest_overdue_minutes = std::max(s.hardcore_rest_overdue_minutes, overdue);
+            }
+        }
     });
 }
 
@@ -706,6 +750,12 @@ SCSAPI_VOID OnTelemetryConfiguration(
                 s.job_fuel_consumed_liters = 0.0f;
                 s.job_max_speed_kmh = s.speed_kmh;
                 s.job_fines.clear();
+
+                // Hardcore tracking reset
+                s.hardcore_speeding_seconds = 0.0f;
+                s.hardcore_rest_overdue_minutes = 0;
+                s.hardcore_auto_park_used = false;
+                s.hardcore_warp_detected = false;
 
                 // Initialize cumulative damage baseline from current wear at job start
                 s.job_prev_wear_engine = s.wear_engine;
@@ -882,8 +932,39 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             comp_req.trailer_damage_pct = static_cast<int32_t>(std::round(max_trl_wear * 100.0f));
             comp_req.cargo_damage_pct = static_cast<int32_t>(std::round(max_crg_wear * 100.0f));
             comp_req.in_game_revenue = (event_revenue > 0) ? static_cast<uint64_t>(event_revenue) : s.reward_payout;
-            comp_req.is_hardcore = !auto_park_used;
-            comp_req.hardcore_rating = auto_park_used ? 0.0f : 5.0f;
+
+            const bool is_late = (s.contract_deadline_min > 0 && s.game_time_minutes > s.contract_deadline_min);
+            const bool hc_profile_ok = (s.hc_traffic_ok && s.hc_fatigue_ok && s.hc_police_ok &&
+                                        s.hc_parking_ok && s.hc_road_events_ok && s.hc_rain_prob_ok &&
+                                        s.hc_advanced_coupling_ok && s.hc_fuel_simulation_ok &&
+                                        s.hc_air_brake_ok && !s.hc_forbidden_mods_found);
+            const bool is_hc_eligible = hc_profile_ok &&
+                                        !auto_park_used &&
+                                        !s.hardcore_warp_detected &&
+                                        driven_km >= 250 &&
+                                        s.cargo_mass_kg > 0.0f &&
+                                        s.job_fuel_consumed_liters > 0.0f;
+
+            comp_req.is_hardcore = is_hc_eligible;
+            comp_req.hardcore_rating = is_hc_eligible ? 5.0f : 0.0f;
+            comp_req.is_hardcore_eligible = is_hc_eligible;
+            comp_req.speeding_seconds = s.hardcore_speeding_seconds;
+            comp_req.rest_overdue_minutes = s.hardcore_rest_overdue_minutes;
+            comp_req.is_late = is_late;
+            comp_req.auto_park_used = auto_park_used;
+            comp_req.warp_detected = s.hardcore_warp_detected;
+            comp_req.has_forbidden_mods = s.hc_forbidden_mods_found;
+            comp_req.forbidden_mods_summary = s.hc_forbidden_mods_list;
+            comp_req.hc_traffic_ok = s.hc_traffic_ok;
+            comp_req.hc_fatigue_ok = s.hc_fatigue_ok;
+            comp_req.hc_police_ok = s.hc_police_ok;
+            comp_req.hc_parking_ok = s.hc_parking_ok;
+            comp_req.hc_road_events_ok = s.hc_road_events_ok;
+            comp_req.hc_rain_prob_ok = s.hc_rain_prob_ok;
+            comp_req.hc_advanced_coupling_ok = s.hc_advanced_coupling_ok;
+            comp_req.hc_fuel_simulation_ok = s.hc_fuel_simulation_ok;
+            comp_req.hc_air_brake_ok = s.hc_air_brake_ok;
+
             comp_req.vehicle_in_game_id = s.truck_in_game_id;
             comp_req.fleet_number = matched_fleet_number;
             comp_req.fines = s.job_fines;
@@ -1033,7 +1114,32 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
     // Simulation time & navigation channels
     version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_game_time, SCS_U32_NIL, SCS_VALUE_TYPE_u32, flags, OnChannelGameTime, nullptr);
     version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_local_scale, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelLocalScale, nullptr);
+    version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_next_rest_stop, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelNextRestStop, nullptr);
     version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_distance, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelNavigationDistance, nullptr);
+
+    // Initial Hardcore profile & mod sanity scan
+    const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
+    const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
+    nismara::core::TelemetryState::Instance().Write([&hc_status](nismara::core::TelemetrySnapshot& s) {
+        s.hardcore_profile_scanned = true;
+        s.hc_traffic_ok = hc_status.traffic_ok;
+        s.hc_fatigue_ok = hc_status.fatigue_ok;
+        s.hc_police_ok = hc_status.police_ok;
+        s.hc_parking_ok = hc_status.parking_ok;
+        s.hc_road_events_ok = hc_status.road_events_ok;
+        s.hc_rain_prob_ok = hc_status.rain_prob_ok;
+        s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
+        s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
+        s.hc_air_brake_ok = hc_status.air_brake_ok;
+        s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
+        if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
+            s.hc_forbidden_mods_list.clear();
+            for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
+                if (i > 0) s.hc_forbidden_mods_list += ", ";
+                s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+            }
+        }
+    });
 
     LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] NISMARA OS v1.0 Telemetry initialized for '%s' (SDK v%u.%u). Press F11 to toggle tablet.",
               game_id.c_str(), major_ver, minor_ver);

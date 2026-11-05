@@ -244,6 +244,25 @@ void ApiClient::PostJobCompleteAsync(const JobCompleteRequest& req) {
         {"inGameRevenue", req.in_game_revenue},
         {"isHardcore", req.is_hardcore},
         {"hardcoreRating", req.hardcore_rating},
+        {"isHardcoreEligible", req.is_hardcore_eligible},
+        {"speedingSeconds", req.speeding_seconds},
+        {"restOverdueMinutes", req.rest_overdue_minutes},
+        {"isLate", req.is_late},
+        {"autoParkUsed", req.auto_park_used},
+        {"warpDetected", req.warp_detected},
+        {"hasForbiddenMods", req.has_forbidden_mods},
+        {"forbiddenModsSummary", req.forbidden_mods_summary},
+        {"hardcoreSettings", {
+            {"trafficOk", req.hc_traffic_ok},
+            {"fatigueOk", req.hc_fatigue_ok},
+            {"policeOk", req.hc_police_ok},
+            {"parkingOk", req.hc_parking_ok},
+            {"roadEventsOk", req.hc_road_events_ok},
+            {"rainProbOk", req.hc_rain_prob_ok},
+            {"advancedCouplingOk", req.hc_advanced_coupling_ok},
+            {"fuelSimOk", req.hc_fuel_simulation_ok},
+            {"airBrakeOk", req.hc_air_brake_ok}
+        }},
         {"vehicleInGameId", req.vehicle_in_game_id},
         {"fleetNumber", req.fleet_number},
         {"fines", fines_arr}
@@ -684,6 +703,20 @@ void ApiClient::ExecuteJobPostWorker(
             pen_pts = data["penalty"].value("total", 0);
         }
 
+        const bool is_hc = data.value("hardcoreEligible", false);
+        const double hc_pts = data.value("hardcorePoints", 0.0);
+        int32_t stars_dist = 0, stars_mass = 0, stars_dmg = 0, stars_fuel = 0, stars_fines = 0, stars_total = 0;
+        if (data.contains("deliveryRating") && data["deliveryRating"].is_object()) {
+            const auto& r = data["deliveryRating"];
+            stars_dist = r.value("distanceStars", 0);
+            stars_mass = r.value("massStars", 0);
+            stars_dmg = r.value("damageStars", 0);
+            stars_fuel = r.value("fuelStars", 0);
+            stars_fines = r.value("finesStars", 0);
+            stars_total = r.value("totalStars", 0);
+        }
+        const std::string hc_reason = data.value("hardcoreDisqualifyReason", "");
+
         TelemetryState::Instance().Write([&](TelemetrySnapshot& s) {
             s.active_job_db_id.clear();
             s.active_job_sync_status = "Completed Job #" + job_id + " (+" + std::to_string(rev_nc) + " NC)";
@@ -700,6 +733,15 @@ void ApiClient::ExecuteJobPostWorker(
             s.last_receipt_tax_nc = tax_nc;
             s.last_receipt_xp = total_xp;
             s.last_receipt_penalty_pts = pen_pts;
+            s.last_receipt_is_hardcore = is_hc;
+            s.last_receipt_hardcore_points = hc_pts;
+            s.last_receipt_stars_distance = stars_dist;
+            s.last_receipt_stars_mass = stars_mass;
+            s.last_receipt_stars_damage = stars_dmg;
+            s.last_receipt_stars_fuel = stars_fuel;
+            s.last_receipt_stars_fines = stars_fines;
+            s.last_receipt_stars_total = stars_total;
+            s.last_receipt_disqualify_reason = hc_reason;
         });
 
         // Refresh driver wallet NC, XP, garage fuel, and fleet wear

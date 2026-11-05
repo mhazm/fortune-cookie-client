@@ -4,7 +4,9 @@
 #include "core/api_client.hpp"
 #include "core/companion_gate.hpp"
 #include "core/config_manager.hpp"
+#include "core/profile_validator.hpp"
 #include "core/server_detector.hpp"
+#include "core/telemetry_state.hpp"
 
 #include <windows.h>
 #include "imgui.h"
@@ -1804,7 +1806,7 @@ void TabletGui::RenderActiveAppView(
                 break;
             case PhoneAppId::Settings:
             default:
-                RenderAppSettings(account);
+                RenderAppSettings(snap, account);
                 break;
         }
 
@@ -2354,19 +2356,42 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
                                             : 0.0f;
             ImGui::Text("Jarak Ditempuh: %.1f km  |  BBM: %.1f L", driven_so_far, snap.job_fuel_consumed_liters);
 
-            const bool is_race_miles = (snap.job_max_speed_kmh > 110.0f);
+            const char* speed_cat = "Real Miles";
+            ImVec4 speed_col = ImVec4(0.20f, 0.83f, 0.60f, 1.0f);
+            if (snap.job_max_speed_kmh > 180.0f) {
+                speed_cat = "Invalid Stats";
+                speed_col = ImVec4(0.94f, 0.27f, 0.27f, 1.0f);
+            } else if (snap.job_max_speed_kmh > 100.0f) {
+                speed_cat = "Race Miles";
+                speed_col = ImVec4(0.98f, 0.44f, 0.52f, 1.0f);
+            }
+
             ImGui::TextColored(
-                is_race_miles ? ImVec4(0.98f, 0.44f, 0.52f, 1.0f) : ImVec4(0.20f, 0.83f, 0.60f, 1.0f),
+                speed_col,
                 "Top Speed: %.0f km/h (%s)  |  Denda: %zu",
                 snap.job_max_speed_kmh,
-                is_race_miles ? "Race Miles" : "Real Miles",
+                speed_cat,
                 snap.job_fines.size());
+
+            const bool hc_profile_ok = (snap.hc_traffic_ok && snap.hc_fatigue_ok && snap.hc_police_ok &&
+                                        snap.hc_parking_ok && snap.hc_road_events_ok && snap.hc_rain_prob_ok &&
+                                        snap.hc_advanced_coupling_ok && snap.hc_fuel_simulation_ok &&
+                                        snap.hc_air_brake_ok && !snap.hc_forbidden_mods_found);
+            const bool is_live_hc = hc_profile_ok &&
+                                    !snap.hardcore_auto_park_used &&
+                                    !snap.hardcore_warp_detected &&
+                                    (snap.planned_distance_km >= 250);
+            if (is_live_hc) {
+                ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.15f, 1.0f), "[★ SIMULASI HARDCORE: ELIGIBLE]");
+            } else {
+                ImGui::TextColored(ImVec4(0.55f, 0.65f, 0.75f, 1.0f), "[SIMULASI STANDAR]");
+            }
         }
         ImGui::EndChild();
     } else {
         // --- TAB 1: SLIP PAYCHECK ---
         if (snap.has_last_job_receipt) {
-            if (ImGui::BeginChild("##PaycheckSlipCard", ImVec2(0.0f, 320.0f), true)) {
+            if (ImGui::BeginChild("##PaycheckSlipCard", ImVec2(0.0f, 360.0f), true)) {
                 ImGui::PushFont(font_semibold_);
                 ImGui::TextColored(ImVec4(0.98f, 0.80f, 0.08f, 1.0f), "SLIP GAJI & LAPORAN JOB #%s", snap.last_receipt_job_id.c_str());
                 ImGui::PopFont();
@@ -2385,7 +2410,7 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
                     ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "Bonus Server Multiplayer: +%d NC", snap.last_receipt_mp_bonus_nc);
                 }
                 if (snap.last_receipt_hardcore_nc > 0) {
-                    ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "Bonus Parkir Hardcore:    +%d NC", snap.last_receipt_hardcore_nc);
+                    ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "Bonus Hardcore Simulation: +%d NC", snap.last_receipt_hardcore_nc);
                 }
                 if (snap.last_receipt_nplus_nc > 0) {
                     ImGui::TextColored(ImVec4(0.75f, 0.52f, 0.99f, 1.0f), "Perks & Event Booster:    +%d NC", snap.last_receipt_nplus_nc);
@@ -2395,6 +2420,17 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
 
                 if (snap.last_receipt_penalty_pts > 0) {
                     ImGui::TextColored(ImVec4(0.94f, 0.27f, 0.27f, 1.0f), "Poin Penalti Pelanggaran: +%d Poin", snap.last_receipt_penalty_pts);
+                }
+
+                if (snap.last_receipt_is_hardcore) {
+                    ImGui::Spacing();
+                    ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.15f, 1.0f), "★ HARDCORE POINTS:        +%.1f HP", snap.last_receipt_hardcore_points);
+                    std::string stars_display;
+                    for (int i = 0; i < snap.last_receipt_stars_total; ++i) stars_display += "★ ";
+                    for (int i = snap.last_receipt_stars_total; i < 5; ++i) stars_display += "☆ ";
+                    ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.15f, 1.0f), "Delivery Rating:          %s (%d/5)", stars_display.c_str(), snap.last_receipt_stars_total);
+                } else if (!snap.last_receipt_disqualify_reason.empty()) {
+                    ImGui::TextDisabled("Hardcore: Diskualifikasi (%s)", snap.last_receipt_disqualify_reason.c_str());
                 }
 
                 ImGui::Spacing();
@@ -3307,7 +3343,9 @@ void TabletGui::RenderAppWallpapers(const nismara::core::DriverAccountProfile& a
     ImGui::PopStyleVar();
 }
 
-void TabletGui::RenderAppSettings(const nismara::core::DriverAccountProfile& account) {
+void TabletGui::RenderAppSettings(
+    const nismara::core::TelemetrySnapshot& snap,
+    const nismara::core::DriverAccountProfile& account) {
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 14.0f);
 
     // Group 1: General & Behavior
@@ -3324,7 +3362,81 @@ void TabletGui::RenderAppSettings(const nismara::core::DriverAccountProfile& acc
     }
     ImGui::EndChild();
 
-    // Group 2: Cloud Sync & Authentication
+    // Group 2: Hardcore Simulation Diagnostics (9 Game Parameters)
+    const bool all_hc_profile_ok = (snap.hc_traffic_ok && snap.hc_fatigue_ok && snap.hc_police_ok &&
+                                    snap.hc_parking_ok && snap.hc_road_events_ok && snap.hc_rain_prob_ok &&
+                                    snap.hc_advanced_coupling_ok && snap.hc_fuel_simulation_ok &&
+                                    snap.hc_air_brake_ok && !snap.hc_forbidden_mods_found);
+    if (ImGui::BeginChild("##HardcoreDiagCard", ImVec2(0.0f, 320.0f), true)) {
+        ImGui::PushFont(font_semibold_);
+        ImGui::TextColored(ImVec4(0.98f, 0.75f, 0.14f, 1.0f), "DIAGNOSTIK SIMULASI HARDCORE");
+        ImGui::PopFont();
+
+        ImGui::SameLine(ImGui::GetWindowWidth() - 110.0f);
+        if (all_hc_profile_ok) {
+            ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "[ELIGIBLE]");
+        } else {
+            ImGui::TextColored(ImVec4(0.94f, 0.27f, 0.27f, 1.0f), "[TIDAK VALID]");
+        }
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        auto draw_hc_item = [&](const char* label, bool ok) {
+            if (ok) {
+                ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "[OK] ");
+            } else {
+                ImGui::TextColored(ImVec4(0.94f, 0.27f, 0.27f, 1.0f), "[X]  ");
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s", label);
+        };
+
+        draw_hc_item("Traffic Aktif (g_traffic >= 1)", snap.hc_traffic_ok);
+        draw_hc_item("Simulasi Kelelahan (g_fatigue = 1)", snap.hc_fatigue_ok);
+        draw_hc_item("Pelanggaran / Polisi (g_police = 1)", snap.hc_police_ok);
+        draw_hc_item("Kesulitan Parkir (Skilled Parking)", snap.hc_parking_ok);
+        draw_hc_item("Road Events (Min. 10%)", snap.hc_road_events_ok);
+        draw_hc_item("Probabilitas Hujan (Min. 10%)", snap.hc_rain_prob_ok);
+        draw_hc_item("Advanced Trailer Coupling", snap.hc_advanced_coupling_ok);
+        draw_hc_item("Konsumsi BBM Realistis", snap.hc_fuel_simulation_ok);
+        draw_hc_item("Simulasi Rem Angin (Air Brakes)", snap.hc_air_brake_ok);
+
+        ImGui::Spacing();
+        if (snap.hc_forbidden_mods_found) {
+            ImGui::TextColored(ImVec4(0.94f, 0.27f, 0.27f, 1.0f), "Mod Terlarang: %s", snap.hc_forbidden_mods_list.c_str());
+        } else {
+            ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "Mod Game: Bebas dari mod terlarang");
+        }
+
+        ImGui::Spacing();
+        if (ImGui::Button("Pindai Ulang Profil Game (Rescan)", ImVec2(-1.0f, 26.0f))) {
+            const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
+            const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
+            nismara::core::TelemetryState::Instance().Write([&hc_status](nismara::core::TelemetrySnapshot& s) {
+                s.hardcore_profile_scanned = true;
+                s.hc_traffic_ok = hc_status.traffic_ok;
+                s.hc_fatigue_ok = hc_status.fatigue_ok;
+                s.hc_police_ok = hc_status.police_ok;
+                s.hc_parking_ok = hc_status.parking_ok;
+                s.hc_road_events_ok = hc_status.road_events_ok;
+                s.hc_rain_prob_ok = hc_status.rain_prob_ok;
+                s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
+                s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
+                s.hc_air_brake_ok = hc_status.air_brake_ok;
+                s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
+                s.hc_forbidden_mods_list.clear();
+                if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
+                    for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
+                        if (i > 0) s.hc_forbidden_mods_list += ", ";
+                        s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+                    }
+                }
+            });
+        }
+    }
+    ImGui::EndChild();
+
+    // Group 3: Cloud Sync & Authentication
     if (ImGui::BeginChild("##SyncSettingsCard", ImVec2(0.0f, 290.0f), true)) {
         ImGui::PushFont(font_semibold_);
         ImGui::TextColored(ImVec4(0.98f, 0.80f, 0.08f, 1.0f), "KONEKSI NISMARA CLOUD TRACKER");

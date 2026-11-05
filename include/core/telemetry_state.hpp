@@ -313,6 +313,40 @@ struct TelemetrySnapshot {
     int32_t last_receipt_tax_nc{0};
     int32_t last_receipt_xp{0};
     int32_t last_receipt_penalty_pts{0};
+
+    // Hardcore Mode Real-time Tracking & Criteria
+    bool hardcore_eligible{true};
+    float hardcore_speeding_seconds{0.0f};
+    int32_t hardcore_rest_overdue_minutes{0};
+    bool hardcore_auto_park_used{false};
+    bool hardcore_warp_detected{false};
+    float hardcore_last_wallclock_sec{0.0f};
+    uint32_t hardcore_last_game_time_min{0};
+
+    // Hardcore Profile Diagnostic Status (9 Parameters)
+    bool hardcore_profile_scanned{false};
+    bool hc_traffic_ok{false};
+    bool hc_fatigue_ok{false};
+    bool hc_police_ok{false};
+    bool hc_parking_ok{false};
+    bool hc_road_events_ok{false};
+    bool hc_rain_prob_ok{false};
+    bool hc_advanced_coupling_ok{false};
+    bool hc_fuel_simulation_ok{false};
+    bool hc_air_brake_ok{false};
+    bool hc_forbidden_mods_found{false};
+    std::string hc_forbidden_mods_list{};
+
+    // Last Job Hardcore Evaluation Receipt
+    bool last_receipt_is_hardcore{false};
+    double last_receipt_hardcore_points{0.0};
+    int32_t last_receipt_stars_distance{0};
+    int32_t last_receipt_stars_mass{0};
+    int32_t last_receipt_stars_damage{0};
+    int32_t last_receipt_stars_fuel{0};
+    int32_t last_receipt_stars_fines{0};
+    int32_t last_receipt_stars_total{0};
+    std::string last_receipt_disqualify_reason{};
 };
 
 /**

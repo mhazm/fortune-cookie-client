@@ -62,6 +62,7 @@ nismara-tracker/
 │   │   ├── telemetry_state.hpp          # Thread-safe singleton penyimpanan data telemetri, akun, fleet, garage, job
 │   │   ├── scs_callbacks.hpp            # Deklarasi callback SCS SDK (frame, channel, config, gameplay events)
 │   │   ├── config_manager.hpp           # Load/save konfigurasi lokal (Documents/<Game>/nismara_config.dat)
+│   │   ├── profile_validator.hpp        # Validasi 9 parameter cvars game & deteksi mod terlarang
 │   │   ├── api_client.hpp               # Async WinHTTP client (/me, /jobs/start, /jobs/complete, /jobs/cancel)
 │   │   └── server_detector.hpp          # Detektor server bermain (Singleplayer, SCS Convoy, TruckersMP, HaulMP)
 │   ├── hooks/
@@ -78,6 +79,7 @@ nismara-tracker/
 │   │   ├── telemetry_state.cpp          # Implementasi thread-safe getter/setter TelemetryState
 │   │   ├── scs_callbacks.cpp            # Parser atribut SCS SDK, fleet matching, akumulasi damage, & job lifecycle
 │   │   ├── config_manager.cpp           # Parser & writer Documents/<Game>/nismara_config.dat + auto-create folder wallpapers/
+│   │   ├── profile_validator.cpp        # Parser file config.cfg & game.log.txt (cvars & forbidden mods scan)
 │   │   ├── api_client.cpp               # Worker thread WinHTTP & JSON parsing respons backend
 │   │   └── server_detector.cpp          # Logika deteksi modul DLL (core_ets2mp.dll, haulmp_stub.dll) & game.log.txt
 │   ├── hooks/
@@ -335,6 +337,10 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
      - Job Canceled / Race Stats / Invalid Stats: `0 Bintang (Diskualifikasi Total)`.
 8. **Deteksi Forbidden Mods**:
    - Memeriksa daftar mod aktif di `game.log.txt` yang mengubah: damage calculation, fuel consumption, tollgates, tank size, speed limits, delivery time, sleeping time, bypass fines, atau economy mod.
+9. **Integrasi Antarmuka In-Game iPhone 16 (`tablet_gui.cpp`)**:
+   - *Settings App*: Dilengkapi kartu **DIAGNOSTIK SIMULASI HARDCORE** dengan checklist 9 parameter status `[OK]` / `[X]`, status mod game, dan tombol interaktif `Pindai Ulang Profil Game (Rescan)` yang dapat dipicu kapan saja tanpa restart game.
+   - *Job Dispatch - Waybill*: Menampilkan klasifikasi kecepatan real-time (`Real Miles` hijau, `Race Miles` crimson, `Invalid Stats` merah), serta badge status kelayakan `[★ SIMULASI HARDCORE: ELIGIBLE]` atau `[SIMULASI STANDAR]`.
+   - *Job Dispatch - Slip Paycheck*: Menampilkan total **Hardcore Points (`+X.X HP`)**, kalkulasi **5-Star Delivery Rating (`★ ★ ★ ★ ☆`)**, serta rincian alasan diskualifikasi jika kriteria tidak terpenuhi.
 
 ---
 
