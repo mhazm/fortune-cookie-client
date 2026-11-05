@@ -360,17 +360,22 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 ### Phase 12: Penggantian Tab Map Menjadi Events & Agregasi Multi-Koleksi MongoDB
 1. **Agregasi Multi-Koleksi MongoDB di Backend (`/api/tracker/events`)**:
    - Penggantian placeholder tab Map di desktop companion dengan pusat informasi kegiatan VTC (**Events**).
-   - Backend `nismara-tracker-server` mengagregasi 4 koleksi MongoDB:
-     - `contracts`: Kontrak pengiriman khusus perusahaan (*Special Contract*), kalkulasi akumulasi muatan, jarak, dan reward NC.
-     - `coupons`: Kupon hadiah & tiket penalty/NC reward bagi driver (`codeCoupon`), batas klaim, dan tanggal kedaluwarsa.
-     - `giveaways`: Quest berhadiah & undian tiket berhadiah dengan rincian tier hadiah serta daftar tugas/syarat.
-     - `ncevents`: Event pengali koin NC resmi komunitas (*Multiplier Boost Event*).
+   - Backend `nismara-tracker-server` mengagregasi 4 koleksi MongoDB (`contracts`, `coupons`, `giveaways`, `ncevents`).
    - Format respons terstandarisasi dengan endpoint `GET /api/tracker/events` yang menyajikan ringkasan metrik statistik serta timeline feed kronologis.
 2. **Antarmuka Interaktif Tab Events di Nismara Companion Desktop App**:
    - Ikon navigasi `Trophy` menggantikan `MapIcon` pada sidebar desktop app.
    - Filter pills kategori (`Semua`, `Kontrak`, `Kupon Hadiah`, `Giveaway Quest`, `NC Boost`).
-   - Kartu event responsif dengan banner visual, badge status (`Aktif`, `Selesai`, `Terjadwal`), countdown/tanggal berakhir, dan preview spesifik (tombol salin kode kupon sekali-klik dengan feedback `Tersalin!`, ringkasan quest giveaway, dan statistik muatan kontrak).
-   - Modal inspektor mendalam (*Event Detail Modal*) untuk melihat seluruh detail kontrak, rincian quest giveaway & tier hadiah, serta syarat partisipasi.
+   - Kartu event responsif dengan banner visual, badge status, countdown/tanggal, ringkasan quest, dan tombol salin kupon interaktif.
+   - Modal inspektor mendalam (*Event Detail Modal*) untuk melihat seluruh detail kontrak, rincian quest giveaway & tier hadiah.
+
+### Phase 13: Penguncian & Perlindungan Endpoint Server Produksi (IP Hiding & Beta Security)
+1. **Paten Endpoint Produksi 24/7 (`http://103.150.101.154:3100`)**:
+   - Menghilangkan seluruh input text/field URL server dari pandangan pengguna di antarmuka Nismara Companion Desktop App maupun aplikasi Settings iPhone 16 in-game C++.
+   - Menggantikannya dengan status badge keamanan: `[●] Nismara Official Cloud Network (Online / 100% Secure)`.
+2. **Auto-Upgrade & Sanitasi Konfigurasi**:
+   - Jika file `nismara_config.dat` pada perangkat driver masih berisi URL dev lama (`localhost:3100`, `localhost:3000`, `127.0.0.1`) atau kosong, C++ plugin dan Tauri Rust engine secara otomatis meng-upgrade-nya ke server live `http://103.150.101.154:3100`.
+   - String `status_message` pada `ApiClient` dibersihkan dari pemaparan raw IP (`Menyinkronkan dengan Nismara Cloud...`).
+   - Binary standalone `NismaraTracker.dll` di bundle `resources/` diperbarui dengan build release terbaru.
 
 ---
 

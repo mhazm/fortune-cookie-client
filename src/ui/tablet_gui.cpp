@@ -3437,28 +3437,14 @@ void TabletGui::RenderAppSettings(
     ImGui::EndChild();
 
     // Group 3: Cloud Sync & Authentication
-    if (ImGui::BeginChild("##SyncSettingsCard", ImVec2(0.0f, 290.0f), true)) {
+    if (ImGui::BeginChild("##SyncSettingsCard", ImVec2(0.0f, 195.0f), true)) {
         ImGui::PushFont(font_semibold_);
-        ImGui::TextColored(ImVec4(0.98f, 0.80f, 0.08f, 1.0f), "KONEKSI NISMARA CLOUD TRACKER");
+        ImGui::TextColored(ImVec4(0.98f, 0.80f, 0.08f, 1.0f), "AUTENTIKASI & AKUN DRIVER");
         ImGui::PopFont();
 
-        ImGui::TextDisabled("Alamat Endpoint Server:");
-        ImGui::SetNextItemWidth(-1.0f);
-        ImGui::InputText("##ApiUrlInput", api_url_buffer_, sizeof(api_url_buffer_));
-
-        if (ImGui::SmallButton("Tracker Server (:3100)")) {
-            std::snprintf(api_url_buffer_, sizeof(api_url_buffer_), "http://localhost:3100");
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Beta Web")) {
-            std::snprintf(api_url_buffer_, sizeof(api_url_buffer_), "https://beta.nismara.web.id");
-        }
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Localhost:3000")) {
-            std::snprintf(api_url_buffer_, sizeof(api_url_buffer_), "http://localhost:3000");
-        }
-
+        ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "[●] Nismara Official Cloud (Terhubung)");
         ImGui::Spacing();
+
         ImGui::TextDisabled("Driver Token (dari Dashboard -> Settings):");
         ImGui::SetNextItemWidth(-64.0f);
         ImGui::InputText(
@@ -3477,11 +3463,11 @@ void TabletGui::RenderAppSettings(
             ImGui::BeginDisabled();
         }
         if (ImGui::Button(is_syncing ? "Menyinkronkan..." : "Simpan & Sinkronkan Akun", ImVec2(-1.0f, 32.0f))) {
-            nismara::core::ConfigManager::Instance().SetApiBaseUrl(api_url_buffer_);
+            nismara::core::ConfigManager::Instance().SetApiBaseUrl(nismara::core::DEFAULT_PRODUCTION_API_URL);
             nismara::core::ConfigManager::Instance().SetDriverToken(token_buffer_);
             if (nismara::core::ConfigManager::Instance().Save()) {
                 save_status_success_ = true;
-                save_status_message_ = "Konfigurasi berhasil disimpan.";
+                save_status_message_ = "Token driver berhasil disimpan.";
             } else {
                 save_status_success_ = false;
                 save_status_message_ = "Gagal menulis nismara_config.dat.";

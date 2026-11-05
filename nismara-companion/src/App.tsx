@@ -250,10 +250,9 @@ export default function App() {
     downloadUrl: string;
   } | null>(null);
 
-  // Settings & Dynamic Paths (No hardcoded developer tokens or drive paths!)
-  const [serverUrl, setServerUrl] = useState(
-    () => localStorage.getItem("nsm_api_url") || "http://localhost:3100",
-  );
+  // Official Production Cloud Endpoint (Hardcoded & Secured for Beta Release)
+  const PRODUCTION_API_URL = "http://103.150.101.154:3100";
+  const serverUrl = PRODUCTION_API_URL;
   const [driverToken, setDriverToken] = useState(
     () => localStorage.getItem("nsm_driver_token") || "",
   );
@@ -488,22 +487,12 @@ export default function App() {
     setEventsLoading(true);
     setEventsError(null);
     try {
-      const base = serverUrl.trim() || "http://localhost:3100";
-      let res: Response | null = null;
-      try {
-        res = await fetch(`${base}/api/tracker/events`, {
-          headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
-        });
-      } catch (networkErr) {
-        if (base !== "http://localhost:3100") {
-          res = await fetch("http://localhost:3100/api/tracker/events");
-        } else {
-          throw networkErr;
-        }
-      }
+      const res = await fetch(`${PRODUCTION_API_URL}/api/tracker/events`, {
+        headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
+      });
 
-      if (!res || !res.ok) {
-        throw new Error(`Server status ${res?.status || 500}`);
+      if (!res.ok) {
+        throw new Error(`Server status ${res.status}`);
       }
 
       const json: EventsApiResponse = await res.json();
@@ -545,17 +534,11 @@ export default function App() {
           setDriverToken(cfg.driver_token);
           localStorage.setItem("nsm_driver_token", cfg.driver_token);
         }
-        if (cfg.api_base_url) {
-          setServerUrl(cfg.api_base_url);
-          localStorage.setItem("nsm_api_url", cfg.api_base_url);
-          checkServerVersion(cfg.api_base_url);
-        } else {
-          checkServerVersion();
-        }
+        checkServerVersion(PRODUCTION_API_URL);
       })
       .catch((err) => {
         console.warn("Could not load initial plugin config:", err);
-        checkServerVersion();
+        checkServerVersion(PRODUCTION_API_URL);
       });
 
     // Check for App Updates silently on launch
@@ -619,20 +602,17 @@ export default function App() {
   };
 
   const handleSavePluginConfig = async () => {
-    const cleanUrl = serverUrl.trim() || "http://localhost:3100";
     const cleanToken = driverToken.trim();
-    localStorage.setItem("nsm_api_url", cleanUrl);
     localStorage.setItem("nsm_driver_token", cleanToken);
     try {
       const saved = await invoke<PluginConfigPayload>("save_plugin_config", {
         driverToken: cleanToken,
-        apiBaseUrl: cleanUrl,
+        apiBaseUrl: PRODUCTION_API_URL,
       });
-      setServerUrl(saved.api_base_url);
       setDriverToken(saved.driver_token);
       setResolvedConfigPath(saved.ets2_config_path);
       notify(
-        "Token & URL Server berhasil disinkronkan ke Documents\\<Game>\\nismara_config.dat!",
+        "Token driver berhasil disinkronkan ke Documents\\<Game>\\nismara_config.dat!",
       );
     } catch (err: any) {
       notify(`Gagal menyimpan konfigurasi plugin: ${err}`, true);
@@ -1729,27 +1709,25 @@ export default function App() {
                     className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    <span>Simpan ke Game Config</span>
+                    <span>Simpan Token ke Game Config</span>
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Server Backend URL (24/7 Tracker Server)
-                  </label>
-                  <input
-                    type="text"
-                    value={serverUrl}
-                    onChange={(e) => {
-                      setServerUrl(e.target.value);
-                      localStorage.setItem("nsm_api_url", e.target.value);
-                    }}
-                    placeholder="http://localhost:3100"
-                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-sky-500 font-mono"
-                  />
-                  <span className="text-[11px] text-slate-500 mt-1 block">
-                    Gunakan http://localhost:3100 untuk development lokal, atau
-                    IP/Domain server 24/7 Nismara Tracker saat live production.
+                {/* Secured Production Cloud Indicator (IP Hidden from User) */}
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950/70 border border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)] animate-pulse" />
+                    <div>
+                      <span className="text-xs font-semibold text-slate-200 block">
+                        Nismara Official Cloud Network
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        Dedicated 24/7 high-speed telemetry server
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg">
+                    Online (100% Secure)
                   </span>
                 </div>
 

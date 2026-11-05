@@ -45,6 +45,8 @@ pub struct SystemStatus {
     pub gatekeeper_active: bool,
 }
 
+pub const DEFAULT_API_BASE_URL: &str = "http://103.150.101.154:3100";
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PluginConfigPayload {
     pub driver_token: String,
@@ -648,8 +650,12 @@ fn write_kv_config(path: &Path, driver_token: &str, api_base_url: &str) -> Resul
 
     let mut existing = read_kv_config(path);
     let clean_url = api_base_url.trim().trim_end_matches('/');
-    let final_url = if clean_url.is_empty() {
-        "http://localhost:3100"
+    let final_url = if clean_url.is_empty()
+        || clean_url == "http://localhost:3100"
+        || clean_url == "http://localhost:3000"
+        || clean_url == "http://127.0.0.1:3100"
+    {
+        DEFAULT_API_BASE_URL
     } else {
         clean_url
     };
@@ -723,11 +729,17 @@ async fn get_plugin_config() -> Result<PluginConfigPayload, String> {
         }
 
         let driver_token = map.get("driver_token").cloned().unwrap_or_default();
-        let api_base_url = map
-            .get("api_base_url")
-            .cloned()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| "http://localhost:3100".to_string());
+        let raw_url = map.get("api_base_url").cloned().unwrap_or_default();
+        let clean_raw = raw_url.trim().trim_end_matches('/');
+        let api_base_url = if clean_raw.is_empty()
+            || clean_raw == "http://localhost:3100"
+            || clean_raw == "http://localhost:3000"
+            || clean_raw == "http://127.0.0.1:3100"
+        {
+            DEFAULT_API_BASE_URL.to_string()
+        } else {
+            clean_raw.to_string()
+        };
 
         PluginConfigPayload {
             driver_token,
@@ -752,24 +764,30 @@ async fn save_plugin_config(
             .map(|sp| get_all_steam_library_folders(sp))
             .unwrap_or_default();
 
+        let clean_url = api_base_url.trim().trim_end_matches('/');
+        let final_api_url = if clean_url.is_empty()
+            || clean_url == "http://localhost:3100"
+            || clean_url == "http://localhost:3000"
+            || clean_url == "http://127.0.0.1:3100"
+        {
+            DEFAULT_API_BASE_URL.to_string()
+        } else {
+            clean_url.to_string()
+        };
+
         for game_id in ["ets2", "ats"] {
             for dir in get_all_game_user_dirs(game_id, &libraries) {
                 let cfg_path = dir.join("nismara_config.dat");
-                write_kv_config(&cfg_path, &driver_token, &api_base_url)?;
+                write_kv_config(&cfg_path, &driver_token, &final_api_url)?;
             }
         }
 
         let ets2_cfg = get_primary_game_user_dir("ets2").join("nismara_config.dat");
         let ats_cfg = get_primary_game_user_dir("ats").join("nismara_config.dat");
-        let clean_url = api_base_url.trim().trim_end_matches('/');
 
         Ok(PluginConfigPayload {
             driver_token: driver_token.trim().to_string(),
-            api_base_url: if clean_url.is_empty() {
-                "http://localhost:3100".to_string()
-            } else {
-                clean_url.to_string()
-            },
+            api_base_url: final_api_url,
             ets2_config_path: ets2_cfg.to_string_lossy().to_string(),
             ats_config_path: ats_cfg.to_string_lossy().to_string(),
         })

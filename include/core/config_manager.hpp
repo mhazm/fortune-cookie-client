@@ -6,9 +6,11 @@
 
 namespace nismara::core {
 
+inline constexpr const char* DEFAULT_PRODUCTION_API_URL = "http://103.150.101.154:3100";
+
 struct PluginConfig {
     std::string driver_token{};
-    std::string api_base_url{"http://localhost:3100"};
+    std::string api_base_url{DEFAULT_PRODUCTION_API_URL};
     std::string steam_id{}; // Prepared for future automatic SteamID64 verification
     int toggle_hotkey_vk{0x7A}; // Default: VK_F11 (0x7A)
     bool overlay_start_visible{false};

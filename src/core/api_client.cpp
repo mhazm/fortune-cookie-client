@@ -87,9 +87,9 @@ void ApiClient::SyncAccountAsync() {
         return;
     }
 
-    TelemetryState::Instance().WriteDriverAccount([&cfg](DriverAccountProfile& acc) {
+    TelemetryState::Instance().WriteDriverAccount([](DriverAccountProfile& acc) {
         acc.status = AccountSyncStatus::Connecting;
-        acc.status_message = "Synchronizing with " + cfg.api_base_url + " ...";
+        acc.status_message = "Menyinkronkan dengan Nismara Cloud...";
     });
 
     std::lock_guard<std::mutex> lock(thread_mutex_);

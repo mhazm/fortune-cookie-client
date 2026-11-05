@@ -26,8 +26,9 @@ std::string NormalizeBaseUrl(const std::string& url) {
     while (!cleaned.empty() && cleaned.back() == '/') {
         cleaned.pop_back();
     }
-    if (cleaned.empty()) {
-        return "http://localhost:3100";
+    // Automatically upgrade empty or legacy development endpoints to official production server
+    if (cleaned.empty() || cleaned == "http://localhost:3100" || cleaned == "http://localhost:3000" || cleaned == "http://127.0.0.1:3100") {
+        return DEFAULT_PRODUCTION_API_URL;
     }
     return cleaned;
 }
