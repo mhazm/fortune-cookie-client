@@ -22,6 +22,11 @@ cmake-build-*/
 *.o
 *.exe
 
+# Allow bundled standalone plugin binaries for Companion app distribution
+!nismara-companion/resources/*.dll
+!nismara-companion/resources/*.so
+!nismara-companion/resources/*.dylib
+
 # ==========================================
 # Node.js & Vite Frontend
 # ==========================================
