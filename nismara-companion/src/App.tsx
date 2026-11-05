@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { check, Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   LayoutGrid,
   Newspaper,
@@ -23,6 +24,9 @@ import {
   Sparkles,
   ShieldAlert,
   ArrowUpCircle,
+  Calendar,
+  User,
+  BookOpen,
 } from "lucide-react";
 
 interface GameInfo {
@@ -57,44 +61,75 @@ interface PluginConfigPayload {
   ats_config_path: string;
 }
 
-interface NewsItem {
-  id: string;
-  tag: string;
-  tagColor: string;
+interface SanityArticle {
+  _id: string;
   title: string;
-  date: string;
-  summary: string;
+  slug?: { current: string };
+  publishedAt: string;
+  mainImage?: {
+    asset?: {
+      _ref?: string;
+    };
+  };
+  author?: {
+    name?: string;
+    image?: any;
+  } | null;
+  categories?: Array<{ title: string }>;
+  seoDescription?: string;
+  body?: any[];
 }
 
-const NEWS_LIST: NewsItem[] = [
-  {
-    id: "1",
-    tag: "UPDATE",
-    tagColor: "bg-blue-600 text-blue-100",
-    title: "Nismara Companion v1.0.0 Resmi Dirilis",
-    date: "04 Nov 2026",
-    summary:
-      "Peluncur desktop resmi VTC Nismara Transport kini aktif dengan integrasi Win32 Gatekeeper Mutex, deteksi direktori game fleksibel, dan auto-updater terenkripsi.",
-  },
-  {
-    id: "2",
-    tag: "CONVOY",
-    tagColor: "bg-emerald-600 text-emerald-100",
-    title: "Konvoi Mingguan: Holland Style European Tour",
-    date: "08 Nov 2026",
-    summary:
-      "Rute lintas negara Rotterdam menuju Munich via TruckersMP Simulation 1. Seluruh driver diharapkan menggunakan fleet resmi Nismara Transport.",
-  },
-  {
-    id: "3",
-    tag: "VTC POLICY",
-    tagColor: "bg-amber-600 text-amber-100",
-    title: "Sistem Penebusan Poin Penalti & Tiket Safebox",
-    date: "01 Nov 2026",
-    summary:
-      "Driver kini dapat menebus poin penalti pelanggaran menggunakan saldo NC (dengan diskon kumulatif Booster & Nismara+) atau tiket brankas garasi pribadi.",
-  },
-];
+function getSanityImageUrl(ref?: string): string | null {
+  if (!ref) return null;
+  // Ref format: image-<hash>-<width>x<height>-<ext>
+  const parts = ref.split("-");
+  if (parts.length < 4) return null;
+  const id = parts[1];
+  const dimensions = parts[2];
+  const ext = parts[3];
+  return `https://cdn.sanity.io/images/yi1d1k89/production/${id}-${dimensions}.${ext}`;
+}
+
+function extractBlockText(body?: any[]): string {
+  if (!body || !Array.isArray(body)) return "";
+  return body
+    .filter((b) => b && b._type === "block" && Array.isArray(b.children))
+    .map((b) => b.children.map((c: any) => c.text || "").join(""))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function formatNewsDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString("id-ID", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function getCategoryColor(category?: string): string {
+  const cat = (category || "").toUpperCase();
+  if (cat.includes("UPDATE") || cat.includes("PATCH")) {
+    return "bg-blue-500/20 text-blue-300 border-blue-500/30";
+  }
+  if (cat.includes("CONVOY") || cat.includes("EVENT")) {
+    return "bg-emerald-500/20 text-emerald-300 border-emerald-500/30";
+  }
+  if (cat.includes("TRANSPORT") || cat.includes("LOGISTICS")) {
+    return "bg-purple-500/20 text-purple-300 border-purple-500/30";
+  }
+  if (cat.includes("POLICY") || cat.includes("RULES") || cat.includes("ATURAN")) {
+    return "bg-amber-500/20 text-amber-300 border-amber-500/30";
+  }
+  return "bg-sky-500/20 text-sky-300 border-sky-500/30";
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<
@@ -107,6 +142,13 @@ export default function App() {
     isError: boolean;
   } | null>(null);
   const [showAboutModal, setShowAboutModal] = useState(false);
+
+  // News from Sanity State
+  const [articles, setArticles] = useState<SanityArticle[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsError, setNewsError] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
+  const [readingArticle, setReadingArticle] = useState<SanityArticle | null>(null);
 
   // Auto-Updater & Version Enforcement State
   const [updateChecking, setUpdateChecking] = useState(false);
@@ -292,6 +334,70 @@ export default function App() {
     }
   };
 
+  // Fetch Articles from Sanity CMS (Nismara Group)
+  const fetchSanityArticles = async () => {
+    setNewsLoading(true);
+    setNewsError(null);
+    try {
+      const sanityQuery = encodeURIComponent(
+        `*[_type == "article" && defined(slug.current)] | order(publishedAt desc) { _id, title, slug, publishedAt, mainImage, author->{ name, image }, categories[]->{ title }, seoDescription, body }`
+      );
+      const sanityUrl = `https://yi1d1k89.api.sanity.io/v2024-03-15/data/query/production?query=${sanityQuery}`;
+
+      let data: SanityArticle[] = [];
+      try {
+        const res = await fetch(sanityUrl);
+        if (res.ok) {
+          const json = await res.json();
+          if (Array.isArray(json.result)) {
+            data = json.result;
+          }
+        }
+      } catch (sanityErr) {
+        console.warn("[News] Sanity CDN fetch error, falling back to Web API:", sanityErr);
+      }
+
+      // Fallback to nismara web api if Sanity CDN didn't return
+      if (data.length === 0) {
+        const fallbackRes = await fetch("https://nismara.web.id/api/articles");
+        if (fallbackRes.ok) {
+          const fallbackJson = await fallbackRes.json();
+          if (Array.isArray(fallbackJson)) {
+            data = fallbackJson;
+          }
+        }
+      }
+
+      if (data.length > 0) {
+        setArticles(data);
+      } else {
+        setNewsError("Tidak ada artikel yang ditemukan saat ini.");
+      }
+    } catch (err: any) {
+      console.error("[News] Failed to load news from Sanity:", err);
+      setNewsError(err?.message || "Gagal memuat berita dari Sanity.");
+    } finally {
+      setNewsLoading(false);
+    }
+  };
+
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    articles.forEach((a) => {
+      a.categories?.forEach((c) => {
+        if (c.title) cats.add(c.title);
+      });
+    });
+    return ["ALL", ...Array.from(cats)];
+  }, [articles]);
+
+  const filteredArticles = useMemo(() => {
+    if (selectedCategory === "ALL") return articles;
+    return articles.filter((a) =>
+      a.categories?.some((c) => c.title === selectedCategory)
+    );
+  }, [articles, selectedCategory]);
+
   // Load saved config & perform initial startup checks
   useEffect(() => {
     invoke<PluginConfigPayload>("get_plugin_config")
@@ -320,6 +426,8 @@ export default function App() {
     checkForUpdates(false);
     // Auto-sync DLLs to games if games are closed
     handleAutoSyncPlugins(true);
+    // Fetch News from Sanity CMS
+    fetchSanityArticles();
   }, []);
 
   useEffect(() => {
@@ -849,39 +957,193 @@ export default function App() {
         {/* VIEW: NEWS */}
         {activeTab === "news" && (
           <div className="flex-1 p-8 overflow-y-auto max-w-5xl mx-auto w-full">
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                <Newspaper className="w-6 h-6 text-sky-400" />
-                <span>Nismara News & Announcements</span>
-              </h2>
-              <p className="text-sm text-slate-400 mt-1">
-                Kabar terbaru, jadwal konvoi, dan log pembaruan VTC.
-              </p>
+            <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Newspaper className="w-6 h-6 text-sky-400" />
+                  <span>Nismara News & Announcements</span>
+                </h2>
+                <p className="text-sm text-slate-400 mt-1">
+                  Kabar resmi, log pembaruan, dan pengumuman komunitas Nismara Group langsung dari Sanity CMS.
+                </p>
+              </div>
+
+              {/* Refresh Button */}
+              <button
+                onClick={fetchSanityArticles}
+                disabled={newsLoading}
+                className="self-start md:self-auto px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`w-3.5 h-3.5 ${
+                    newsLoading ? "animate-spin text-sky-400" : ""
+                  }`}
+                />
+                <span>{newsLoading ? "Memuat..." : "Segarkan Berita"}</span>
+              </button>
             </div>
 
-            <div className="space-y-4">
-              {NEWS_LIST.map((item) => (
-                <div
-                  key={item.id}
-                  className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 hover:border-slate-700 transition-all flex flex-col gap-2.5 backdrop-blur-sm"
+            {/* Category Filter Pills */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-6 scrollbar-none">
+              {availableCategories.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all cursor-pointer whitespace-nowrap ${
+                    selectedCategory === cat
+                      ? "bg-sky-500 text-white shadow-md shadow-sky-500/20"
+                      : "bg-slate-800/60 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-slate-700/50"
+                  }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider ${item.tagColor}`}
-                    >
-                      {item.tag}
-                    </span>
-                    <span className="text-xs text-slate-400">{item.date}</span>
-                  </div>
-                  <h3 className="text-lg font-bold text-slate-100">
-                    {item.title}
-                  </h3>
-                  <p className="text-sm text-slate-300 leading-relaxed">
-                    {item.summary}
-                  </p>
-                </div>
+                  {cat === "ALL" ? "Semua Kategori" : cat}
+                </button>
               ))}
             </div>
+
+            {/* Error banner if any */}
+            {newsError && (
+              <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center justify-between mb-6">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                  <span>{newsError}</span>
+                </div>
+                <button
+                  onClick={fetchSanityArticles}
+                  className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-bold rounded-lg cursor-pointer transition-all"
+                >
+                  Coba Lagi
+                </button>
+              </div>
+            )}
+
+            {/* Loading skeletons */}
+            {newsLoading && articles.length === 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {[1, 2, 3, 4].map((i) => (
+                  <div
+                    key={i}
+                    className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 animate-pulse flex flex-col gap-3"
+                  >
+                    <div className="w-full h-44 rounded-xl bg-slate-800/70" />
+                    <div className="h-4 w-28 rounded bg-slate-800" />
+                    <div className="h-6 w-3/4 rounded bg-slate-800" />
+                    <div className="h-12 w-full rounded bg-slate-800/50" />
+                  </div>
+                ))}
+              </div>
+            ) : filteredArticles.length === 0 ? (
+              <div className="p-12 text-center rounded-2xl bg-slate-900/40 border border-slate-800 text-slate-400">
+                <Newspaper className="w-10 h-10 mx-auto mb-3 opacity-40 text-slate-500" />
+                <p className="text-sm">Tidak ada artikel untuk kategori ini.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                {filteredArticles.map((article) => {
+                  const imgUrl = getSanityImageUrl(
+                    article.mainImage?.asset?._ref,
+                  );
+                  const excerpt =
+                    article.seoDescription ||
+                    extractBlockText(article.body).slice(0, 160) + "...";
+
+                  return (
+                    <article
+                      key={article._id}
+                      className="group rounded-2xl bg-slate-900/70 border border-slate-800/90 hover:border-slate-700/80 hover:bg-slate-900/90 transition-all flex flex-col overflow-hidden backdrop-blur-sm shadow-lg shadow-black/20"
+                    >
+                      {/* Cover Image if available */}
+                      {imgUrl ? (
+                        <div className="relative w-full h-48 bg-slate-950 overflow-hidden">
+                          <img
+                            src={imgUrl}
+                            alt={article.title}
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-black/20" />
+                          <div className="absolute top-3 left-3 flex flex-wrap gap-1.5">
+                            {article.categories?.map((cat, idx) => (
+                              <span
+                                key={idx}
+                                className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border backdrop-blur-md ${getCategoryColor(
+                                  cat.title,
+                                )}`}
+                              >
+                                {cat.title}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="p-4 pb-0 flex items-center gap-1.5">
+                          {article.categories?.map((cat, idx) => (
+                            <span
+                              key={idx}
+                              className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${getCategoryColor(
+                                cat.title,
+                              )}`}
+                            >
+                              {cat.title}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="p-5 flex-1 flex flex-col justify-between gap-4">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-[11px] text-slate-400">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                              <span>{formatNewsDate(article.publishedAt)}</span>
+                            </span>
+                            {article.author?.name && (
+                              <span className="flex items-center gap-1 text-slate-400">
+                                <User className="w-3.5 h-3.5 text-slate-500" />
+                                <span>{article.author.name}</span>
+                              </span>
+                            )}
+                          </div>
+
+                          <h3 className="text-base font-bold text-white group-hover:text-sky-300 transition-colors line-clamp-2">
+                            {article.title}
+                          </h3>
+
+                          <p className="text-xs text-slate-300/90 leading-relaxed line-clamp-3">
+                            {excerpt}
+                          </p>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                          <button
+                            onClick={() => setReadingArticle(article)}
+                            className="px-3 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                          >
+                            <BookOpen className="w-3.5 h-3.5" />
+                            <span>Baca Rincian</span>
+                          </button>
+
+                          {article.slug?.current && (
+                            <button
+                              onClick={() => {
+                                const url = `https://nismara.web.id/articles/${article.slug?.current}`;
+                                openUrl(url).catch(() =>
+                                  window.open(url, "_blank"),
+                                );
+                              }}
+                              className="px-3 py-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-medium flex items-center gap-1 transition-all cursor-pointer"
+                              title="Buka di Website Resmi"
+                            >
+                              <span>Buka di Web</span>
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1399,6 +1661,106 @@ export default function App() {
                 <span>Website Resmi</span>
                 <ExternalLink className="w-3 h-3" />
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ARTICLE READER MODAL */}
+      {readingArticle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 sm:p-6 animate-in fade-in duration-150">
+          <div className="w-full max-w-2xl max-h-[85vh] rounded-2xl bg-slate-900 border border-slate-700/80 shadow-2xl text-slate-200 relative flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/95 sticky top-0 z-10">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-sky-400" />
+                <span className="text-sm font-bold text-white uppercase tracking-wider">
+                  Nismara Gazette
+                </span>
+              </div>
+              <button
+                onClick={() => setReadingArticle(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Scrollable Content */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-5">
+              {/* Cover Image */}
+              {readingArticle.mainImage?.asset?._ref && (
+                <div className="w-full h-64 rounded-xl overflow-hidden bg-slate-950">
+                  <img
+                    src={
+                      getSanityImageUrl(
+                        readingArticle.mainImage.asset._ref,
+                      ) || ""
+                    }
+                    alt={readingArticle.title}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+              )}
+
+              {/* Badges & Meta */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                <div className="flex flex-wrap gap-1.5">
+                  {readingArticle.categories?.map((cat, idx) => (
+                    <span
+                      key={idx}
+                      className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border ${getCategoryColor(
+                        cat.title,
+                      )}`}
+                    >
+                      {cat.title}
+                    </span>
+                  ))}
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                    <span>
+                      {formatNewsDate(readingArticle.publishedAt)}
+                    </span>
+                  </span>
+                  {readingArticle.author?.name && (
+                    <span className="flex items-center gap-1">
+                      <User className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{readingArticle.author.name}</span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Title */}
+              <h2 className="text-2xl font-bold text-white leading-snug">
+                {readingArticle.title}
+              </h2>
+
+              {/* Text content paragraphs */}
+              <div className="text-sm text-slate-300 leading-relaxed whitespace-pre-line space-y-4 font-sans">
+                {extractBlockText(readingArticle.body) ||
+                  readingArticle.seoDescription ||
+                  "Tidak ada konten rincian."}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-950/80 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
+              <span>Publikasi resmi Nismara Group (Sanity CMS)</span>
+              {readingArticle.slug?.current && (
+                <button
+                  onClick={() => {
+                    const url = `https://nismara.web.id/articles/${readingArticle.slug?.current}`;
+                    openUrl(url).catch(() => window.open(url, "_blank"));
+                  }}
+                  className="px-4 py-2 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-sky-600/20"
+                >
+                  <span>Buka di Browser</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
         </div>

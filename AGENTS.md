@@ -344,6 +344,19 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - *Job Dispatch - Waybill*: Menampilkan klasifikasi kecepatan real-time (`Real Miles` hijau, `Race Miles` crimson, `Invalid Stats` merah), serta badge status kelayakan `[★ SIMULASI HARDCORE: ELIGIBLE]` atau `[SIMULASI STANDAR]`.
    - *Job Dispatch - Slip Paycheck*: Menampilkan total **Hardcore Points (`+X.X HP`)**, kalkulasi **5-Star Delivery Rating (`★ ★ ★ ★ ☆`)**, serta rincian alasan diskualifikasi jika kriteria tidak terpenuhi.
 
+### Phase 11: Integrasi Berita Sanity CMS di Nismara Companion Desktop App
+1. **Live Fetching dari Sanity CMS**:
+   - Mengambil artikel resmi Nismara Group langsung dari **Sanity Edge CDN** (`projectId: yi1d1k89`, `dataset: production`, `apiVersion: 2024-03-15`) dengan GROQ query berurutan `publishedAt desc`.
+   - Dilengkapi mekanisme fallback ke REST API publik `https://nismara.web.id/api/articles`.
+2. **Koleksi & Penyajian Media Resolusi Tinggi**:
+   - Transformasi referensi asset `image-<hash>-<width>x<height>-<ext>` ke URL Sanity Image CDN global (`https://cdn.sanity.io/images/yi1d1k89/production/...`).
+   - Rasio 16:9 dengan overlay badge kategori dinamis (`Update`, `News`, `Transport`, dll.).
+3. **Fitur Antarmuka Tab News**:
+   - Filter interaktif berbasis kategori dinamis (pills) yang diekstrak otomatis dari metadata artikel.
+   - Indikator loading skeleton dan tombol manual `Segarkan Berita` (`RefreshCw`).
+   - Modal Reader pop-up (`Nismara Gazette`) di dalam aplikasi untuk membaca artikel lengkap tanpa harus keluar dari aplikasi.
+   - Integrasi tombol `Buka di Web` dengan `@tauri-apps/plugin-opener` (`openUrl`) untuk membuka tautan di browser default sistem.
+
 ---
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
