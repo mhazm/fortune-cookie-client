@@ -254,10 +254,13 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
      - **Jika Companion TIDAK berjalan**: Tombol `F11` sepenuhnya dinonaktifkan (*disabled/dormant*), kursor game tidak dibebaskan, dan overlay iPhone 16 tidak pernah terbuka.
      - **Jika Companion SEDANG berjalan**: Tombol `F11` langsung aktif normal membuka iPhone 16 OS.
      - **Jika Companion ditutup saat HP sedang terbuka**: Di dalam rendering loop ([`src/ui/tablet_gui.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/ui/tablet_gui.cpp)), sistem mendeteksi hilangnya Mutex dan langsung menutup tampilan HP secara otomatis.
-3. **Ekosistem Auto-Updater (`@tauri-apps/plugin-updater`)**:
-   - Backend `nismara-tracker-server` menyediakan manifest pembaruan versi di `GET /api/tracker/update.json`.
-   - Menggunakan pasangan kunci Minisign untuk validasi integritas binary pembaruan secara kriptografis (`pubkey` terdaftar di `tauri.conf.json`).
-   - Menyediakan kemampuan auto-update untuk aplikasi desktop sekaligus auto-deploy binary plugin terbaru ke direktori `plugins/` game yang terdeteksi.
+3. **Ekosistem CI/CD & Auto-Updater via GitHub Releases (`.github/workflows/release.yml`)**:
+   - Kompilasi otomatis multi-platform (Windows `.exe`, Linux `.AppImage`/`.deb`, macOS `.dmg`) dijalankan via **GitHub Actions** setiap kali git tag `v*` di-push atau dijalankan via `workflow_dispatch`.
+   - Pada runner Windows, workflow secara otomatis mengompilasi `NismaraTracker.dll` (Release x64) terlebih dahulu dengan CMake & MSBuild, menyalinnya ke `resources/` paket installer Companion, dan mengunggahnya sebagai standalone asset di GitHub Release.
+   - Endpoint auto-updater di `tauri.conf.json` diarahkan langsung ke GitHub Releases:
+     `https://github.com/mhazm/fortune-cookie-client/releases/latest/download/latest.json`
+   - Hal ini menghemat beban bandwidth server VPS secara drastis (di-hosting gratis dan berkecepatan tinggi oleh GitHub Global CDN) serta memudahkan 300+ driver menerima pembaruan instan.
+   - Integritas biner pembaruan divalidasi dengan enkripsi Minisign (`pubkey` di `tauri.conf.json` dan `TAURI_SIGNING_PRIVATE_KEY` di GitHub Secrets).
 
 ---
 
