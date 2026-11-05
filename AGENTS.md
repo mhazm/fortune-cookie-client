@@ -282,6 +282,54 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
        `! UPDATE DIPERLUKAN: Wajib v{min_ver} - Buka Nismara Companion`.
      - Pengemudi langsung mengetahui bahwa mereka perlu membuka Companion untuk memperbarui aplikasi.
 
+### Phase 10: Spesifikasi Hardcore Mode, Validasi Parameter Game, & Kalkulasi Hardcore Points (HP)
+1. **Definisi Hardcore Mode**:
+   - Mode simulasi penuh di mana seluruh parameter realisme game wajib aktif, tanpa bantuan instan (*no auto-assist*), tanpa mod terlarang, dan dengan pengujian berkendara ketat.
+2. **9 Parameter Konfigurasi Profil Game Wajib**:
+   1. `g_traffic >= 1` (Traffic wajib ada, tidak boleh 0).
+   2. `g_fatigue = 1` (Fatigue / Kelelahan pengemudi = Yes).
+   3. `g_police = 1` (Traffic Offence / Tilang polisi = Yes).
+   4. `g_simple_parking_doubles = 0` / Parking Difficulty = Skilled Parking (Parkir manual presisi tinggi).
+   5. `g_road_events >= 0.1` (Random Road Events minimal 10%).
+   6. `g_rain_prob >= 0.1` (Probabilitas hujan minimal 10%).
+   7. `g_trailer_advanced_coupling = 1` (Advanced Trailer Coupling = Yes).
+   8. `g_fuel_economy = 1` (Realistic Fuel Consumption = Yes).
+   9. `g_air_brake = 1` (Air Brakes Simulation = Yes).
+3. **Kriteria Validasi Kelayakan Hardcore (Semua Wajib Terpenuhi)**:
+   - Seluruh 9 setting konfigurasi profil di atas terkonfigurasi dengan benar.
+   - Tidak menggunakan Auto Load (*No Auto Load* — dikecualikan untuk Freight Market, Public Transport System, dan WOTR Freight Market).
+   - Parkir Manual (*Manual Parking* — event `auto_parking_used == false`).
+   - Jarak tempuh di atas 250 km (`distanceKm >= 250`).
+   - Tidak ada manipulasi waktu / warp (*No Warping* — rasio waktu in-game vs wall-clock valid, warp value tidak berubah).
+   - Tidak menggunakan Damage Mod (kerusakan fisik aktif & logis).
+   - Massa kargo lebih dari 0 ton (`cargoMassTons > 0`).
+   - Bahan bakar terpakai lebih dari 0 liter (`fuelUsedLiters > 0`).
+   - Tidak ada Forbidden Mods yang terdeteksi di `game.log.txt`.
+   - Tidak melakukan rute berulang secara eksploitatif (*No Repetitive Route*).
+   - Massa kargo masuk akal (*Reasonable Cargo Mass*).
+4. **Rumus Perhitungan Hardcore Points (HP)**:
+   $$\text{HP} = 0.4 \times \text{Distance} + 0.35 \times \text{Mass} - 0.4 \times \text{Fuel Economy} - 1.0 \times \text{Damage Percentage} - 5.0 \times \text{Number of Fines}$$
+   - *Non SCS Stock Cargo*: Nilai bonus massa kargo tetap bernilai `5.25`.
+5. **Penalti Pengurangan HP**:
+   - *Late Delivery*: Penalti `-50%` dari total bonus Distance dan Mass.
+   - *Rest Time Stop Overdue*: Melewati batas istirahat > 30 menit waktu game $\rightarrow$ Penalti `-50%` dari total bonus Distance dan Mass.
+   - *Race / Invalid Stats*: Pengurangan total bonus Distance dan Mass.
+   - *Job Canceled*: Pengurangan total bonus Distance dan Mass.
+   - *Speeding (Batas > 40 km/h, toleransi 5 km/h)*: Maksimal waktu mengebut yang diizinkan adalah `10%` dari Real-Time driving. Setiap 1 menit mengebut di atas batas tersebut dikenakan penalti `-5%` dari bonus Distance dan Mass.
+6. **Delivery Rating Bintang (0 hingga 5 Bintang)**:
+   - **Distance Rating**: `<250km`: 0★, `250-499km`: 1★, `500-749km`: 2★, `750-999km`: 3★, `1000-1249km`: 4★, `≥1250km`: 5★.
+   - **Mass Rating**: `<10t`: 0★, `10-14.99t`: 1★, `15-19.99t`: 2★, `20-24.99t`: 3★, `25-29.99t`: 4★, `≥30t`: 5★ (Non SCS Stock Cargo = 1★).
+   - **Damage Rating**: `0%`: 5★, `1-10%`: 4★, `11-20%`: 3★, `21-30%`: 2★, `31-40%`: 1★, `>40%`: 0★.
+   - **Fuel Economy Rating**: Ideal ETS2 = 38 L/100km, ATS = 42 L/100km.
+     $$\text{Stars} = \text{clamp}\left(5 - \frac{\text{FuelEconomy} - \text{Ideal}}{\text{Ideal}},\ 0,\ 5\right)$$
+   - **Fines Rating**: `0 fines`: 5★, `1 fine`: 4★, `2 fines`: 3★, `3 fines`: 2★, `4 fines`: 1★, `≥5 fines`: 0★.
+   - **Penalti Bintang Akhir**:
+     - Late Delivery: `-2 Bintang`.
+     - Rest Time Overdue: `-2 Bintang`.
+     - Job Canceled / Race Stats: `0 Bintang (Diskualifikasi Total)`.
+7. **Deteksi Forbidden Mods**:
+   - Memeriksa daftar mod aktif di `game.log.txt` yang mengubah: damage calculation, fuel consumption, tollgates, tank size, speed limits, delivery time, sleeping time, bypass fines, atau economy mod.
+
 ---
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
