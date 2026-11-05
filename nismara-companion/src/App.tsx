@@ -1455,14 +1455,52 @@ export default function App() {
           <div className="flex items-center gap-3 overflow-hidden">
             <div className="flex items-center gap-1.5 shrink-0">
               <span className="font-semibold text-slate-300">What's new</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-blue-600 text-white">
-                NEW
+              <span
+                className={`px-1.5 py-0.5 rounded text-[10px] font-black uppercase ${
+                  articles[0]?.categories?.[0]?.title
+                    ?.toUpperCase()
+                    .includes("UPDATE")
+                    ? "bg-blue-600 text-white"
+                    : articles[0]?.categories?.[0]?.title
+                        ?.toUpperCase()
+                        .includes("CONVOY")
+                    ? "bg-emerald-600 text-white"
+                    : "bg-sky-600 text-white"
+                }`}
+              >
+                {articles[0]?.categories?.[0]?.title
+                  ? articles[0].categories[0].title.toUpperCase()
+                  : "NEW"}
               </span>
             </div>
-            <span className="truncate text-slate-300/90 text-[11px]">
-              Nismara Companion v1.0.0 resmi diluncurkan dengan native
-              Gatekeeper Mutex guard dan peluncur game instan.
-            </span>
+            <button
+              onClick={() => {
+                if (articles[0]) {
+                  setReadingArticle(articles[0]);
+                } else {
+                  setActiveTab("news");
+                }
+              }}
+              className="truncate text-slate-300/90 hover:text-sky-300 text-[11px] text-left transition-colors cursor-pointer group flex items-center gap-1.5"
+              title={
+                articles[0]
+                  ? `Klik untuk membaca: ${articles[0].title}`
+                  : "Buka Tab Berita"
+              }
+            >
+              <span className="truncate">
+                {articles[0]
+                  ? `${articles[0].title}${
+                      articles[0].seoDescription
+                        ? ` — ${articles[0].seoDescription}`
+                        : ""
+                    }`
+                  : "Nismara Companion v1.0.0 resmi diluncurkan dengan native Gatekeeper Mutex guard dan peluncur game instan."}
+              </span>
+              <span className="text-[10px] text-sky-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                (Baca ↗)
+              </span>
+            </button>
           </div>
 
           {/* Right Update Checker & Info */}
