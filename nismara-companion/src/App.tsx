@@ -185,8 +185,19 @@ export default function App() {
       }
     } catch (err: any) {
       console.warn("Tauri updater check error:", err);
-      if (manual) {
-        notify(`Pemeriksaan pembaruan: ${err?.message || err}`, true);
+      const errMsg = String(err?.message || err);
+      if (
+        errMsg.includes("Could not fetch a valid release JSON") ||
+        errMsg.includes("404") ||
+        errMsg.includes("not found")
+      ) {
+        // When latest.json is 404 (initial release or no newer release published), app is already latest
+        setAvailableUpdate(null);
+        if (manual) {
+          notify("Nismara Companion sudah dalam versi terbaru (v1.0.0).");
+        }
+      } else if (manual) {
+        notify(`Pemeriksaan pembaruan: ${errMsg}`, true);
       }
     } finally {
       setUpdateChecking(false);
