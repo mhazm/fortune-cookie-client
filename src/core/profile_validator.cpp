@@ -124,59 +124,61 @@ HardcoreProfileStatus ProfileValidator::ScanProfileSettings(const std::filesyste
         return status;
     }
 
-    // 1. First parse master config.cfg for default fallback values (e.g. g_traffic)
-    std::filesystem::path configPath = game_dir / "config.cfg";
-    std::string configContent = ReadFileShared(configPath, 131072);
-    if (!configContent.empty()) {
-        std::istringstream stream(configContent);
-        std::string line;
-        while (std::getline(stream, line)) {
-            ParseCvarLine(line, status);
-        }
-    }
-
-    // 2. Parse game.log.txt which contains the live profile cvars and loaded mod packages
-    std::filesystem::path logPath = game_dir / "game.log.txt";
-    std::string logContent = ReadFileShared(logPath, 2097152); // scan last 2MB of log
-    if (!logContent.empty()) {
-        status.scanned = true;
-        std::istringstream stream(logContent);
-        std::string line;
-
-        static const std::vector<std::string> forbiddenKeywords = {
-            "no damage", "no_damage", "nodamage", "zero damage", "0% damage",
-            "unlimited fuel", "infinite fuel", "infinit fuel", "free fuel",
-            "no police", "no fines", "nofines",
-            "disable fatigue", "no fatigue",
-            "speed limit remover", "no speed limit",
-            "unlimited money", "easy money", "economy mod"
-        };
-
-        while (std::getline(stream, line)) {
-            // Check cvars in game.log.txt (profile overrides)
-            if (line.find("uset ") != std::string::npos) {
+    try {
+        // 1. First parse master config.cfg for default fallback values (e.g. g_traffic)
+        std::filesystem::path configPath = game_dir / "config.cfg";
+        std::string configContent = ReadFileShared(configPath, 131072);
+        if (!configContent.empty()) {
+            std::istringstream stream(configContent);
+            std::string line;
+            while (std::getline(stream, line)) {
                 ParseCvarLine(line, status);
             }
+        }
 
-            // Check for forbidden mods in mounting lines
-            if (line.find("Mounting package") != std::string::npos ||
-                line.find("[zipfs]") != std::string::npos ||
-                line.find("[hashfs]") != std::string::npos) {
-                
-                std::string lowerLine = ToLowerAscii(line);
-                for (const auto& kw : forbiddenKeywords) {
-                    if (lowerLine.find(kw) != std::string::npos) {
-                        status.has_forbidden_mods = true;
-                        // Extract package name cleanly
-                        size_t colon = line.rfind(':');
-                        std::string modName = (colon != std::string::npos) ? line.substr(0, colon) : line;
-                        status.forbidden_mods.push_back(modName);
-                        break;
+        // 2. Parse game.log.txt which contains the live profile cvars and loaded mod packages
+        std::filesystem::path logPath = game_dir / "game.log.txt";
+        std::string logContent = ReadFileShared(logPath, 2097152); // scan last 2MB of log
+        if (!logContent.empty()) {
+            status.scanned = true;
+            std::istringstream stream(logContent);
+            std::string line;
+
+            static const std::vector<std::string> forbiddenKeywords = {
+                "no damage", "no_damage", "nodamage", "zero damage", "0% damage",
+                "unlimited fuel", "infinite fuel", "infinit fuel", "free fuel",
+                "no police", "no fines", "nofines",
+                "disable fatigue", "no fatigue",
+                "speed limit remover", "no speed limit",
+                "unlimited money", "easy money", "economy mod"
+            };
+
+            while (std::getline(stream, line)) {
+                // Check cvars in game.log.txt (profile overrides)
+                if (line.find("uset ") != std::string::npos) {
+                    ParseCvarLine(line, status);
+                }
+
+                // Check for forbidden mods in mounting lines
+                if (line.find("Mounting package") != std::string::npos ||
+                    line.find("[zipfs]") != std::string::npos ||
+                    line.find("[hashfs]") != std::string::npos) {
+                    
+                    std::string lowerLine = ToLowerAscii(line);
+                    for (const auto& kw : forbiddenKeywords) {
+                        if (lowerLine.find(kw) != std::string::npos) {
+                            status.has_forbidden_mods = true;
+                            // Extract package name cleanly
+                            size_t colon = line.rfind(':');
+                            std::string modName = (colon != std::string::npos) ? line.substr(0, colon) : line;
+                            status.forbidden_mods.push_back(modName);
+                            break;
+                        }
                     }
                 }
             }
         }
-    }
+    } catch (...) {}
 
     return status;
 }

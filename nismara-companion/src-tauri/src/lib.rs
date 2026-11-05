@@ -486,12 +486,14 @@ fn probe_game_directory(candidate: &Path, app_name: &str, exe_stem: &str) -> Opt
 
 fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
     let candidate_sources = [
+        PathBuf::from(format!("resources/{}", binary_name)),
+        PathBuf::from(format!("_up_/resources/{}", binary_name)),
+        PathBuf::from(format!("../resources/{}", binary_name)),
+        PathBuf::from(format!("../../resources/{}", binary_name)),
         PathBuf::from(format!("../bin/{}", binary_name)),
         PathBuf::from(format!("bin/{}", binary_name)),
         PathBuf::from(format!("../../bin/{}", binary_name)),
         PathBuf::from(binary_name),
-        PathBuf::from(format!("resources/{}", binary_name)),
-        PathBuf::from(format!("../resources/{}", binary_name)),
     ];
 
     for cand in &candidate_sources {
@@ -502,12 +504,19 @@ fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
-            let candidate1 = parent.join(binary_name);
-            let candidate2 = parent.join("resources").join(binary_name);
-            if candidate1.exists() {
-                return Some(candidate1);
-            } else if candidate2.exists() {
-                return Some(candidate2);
+            let candidates = [
+                parent.join("resources").join(binary_name),
+                parent.join("_up_").join("resources").join(binary_name),
+                parent.join("_up_").join(binary_name),
+                parent.join(binary_name),
+                parent.join("..").join("resources").join(binary_name),
+                parent.join("..").join("bin").join(binary_name),
+            ];
+
+            for cand in &candidates {
+                if cand.exists() {
+                    return Some(cand.clone());
+                }
             }
         }
     }

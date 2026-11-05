@@ -626,12 +626,13 @@ SCSAPI_VOID OnTelemetryConfiguration(
         return;
     }
 
-    const auto* info = static_cast<const scs_telemetry_configuration_t*>(event_info);
-    if (!info->id) {
-        return;
-    }
+    try {
+        const auto* info = static_cast<const scs_telemetry_configuration_t*>(event_info);
+        if (!info->id) {
+            return;
+        }
 
-    if (std::strcmp(info->id, SCS_TELEMETRY_CONFIG_truck) == 0) {
+        if (std::strcmp(info->id, SCS_TELEMETRY_CONFIG_truck) == 0) {
         const std::string brand_id = GetStringAttribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand_id);
         const std::string model_id = GetStringAttribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_id);
         const std::string brand = GetStringAttribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_brand);
@@ -812,6 +813,7 @@ SCSAPI_VOID OnTelemetryConfiguration(
         LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] Active job loaded: %s (%s -> %s)",
                   cargo.c_str(), src_city.c_str(), dst_city.c_str());
     }
+    } catch (...) {}
 }
 
 SCSAPI_VOID OnTelemetryGameplayEvent(
@@ -822,10 +824,11 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
         return;
     }
 
-    const auto* info = static_cast<const scs_telemetry_gameplay_event_t*>(event_info);
-    if (!info->id) {
-        return;
-    }
+    try {
+        const auto* info = static_cast<const scs_telemetry_gameplay_event_t*>(event_info);
+        if (!info->id) {
+            return;
+        }
 
     if (std::strcmp(info->id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_fined) == 0) {
         const auto* off_attr = FindNamedAttr(
@@ -997,6 +1000,7 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             s.last_job_status = "Active Contract (job_started)";
         });
     }
+    } catch (...) {}
 }
 
 } // namespace
@@ -1015,143 +1019,163 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
         return SCS_RESULT_invalid_parameter;
     }
 
-    const auto* version_params = static_cast<const scs_telemetry_init_params_v101_t*>(params);
-    g_game_log = version_params->common.log;
+    try {
+        const auto* version_params = static_cast<const scs_telemetry_init_params_v101_t*>(params);
+        g_game_log = version_params->common.log;
 
-    LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] SCS Telemetry v1.01 initialized successfully.");
+        LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] SCS Telemetry v1.01 initialized successfully.");
 
-    // Load local configuration (nismara_config.dat)
-    nismara::core::ConfigManager::Instance().Load();
+        // Load local configuration (nismara_config.dat)
+        try {
+            nismara::core::ConfigManager::Instance().Load();
+        } catch (...) {}
 
-    // Ensure DX11 overlay hook is active
-    nismara::hooks::Dx11Hook::Instance().StartAsync();
+        // Ensure DX11 overlay hook is active
+        try {
+            nismara::hooks::Dx11Hook::Instance().StartAsync();
+        } catch (...) {}
 
-    // Auto-sync account only if Nismara Companion is actively running in background
-    if (nismara::core::IsCompanionAppRunning() &&
-        !nismara::core::ConfigManager::Instance().GetConfig().driver_token.empty()) {
-        nismara::core::ApiClient::Instance().SyncAccountAsync();
-    }
-
-    // Store game identity & engine version
-    const std::string game_id = version_params->common.game_id ? version_params->common.game_id : "unknown";
-    const std::string game_name = version_params->common.game_name ? version_params->common.game_name : "SCS Game";
-    const uint32_t major_ver = SCS_GET_MAJOR_VERSION(version_params->common.game_version);
-    const uint32_t minor_ver = SCS_GET_MINOR_VERSION(version_params->common.game_version);
-
-    nismara::core::TelemetryState::Instance().Write([&](nismara::core::TelemetrySnapshot& s) {
-        s.game_id = game_id;
-        s.game_name = game_name;
-        s.game_version_major = major_ver;
-        s.game_version_minor = minor_ver;
-        s.sdk_active = true;
-        s.is_paused = true;
-    });
-
-    // Start background Server & Multiplayer Detector (Singleplayer / Convoy / TruckersMP / HaulMP)
-    nismara::core::ServerDetector::Instance().Initialize();
-
-    // Register core lifecycle & configuration events
-    const bool events_ok =
-        (version_params->register_for_event(SCS_TELEMETRY_EVENT_paused, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
-        (version_params->register_for_event(SCS_TELEMETRY_EVENT_started, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
-        (version_params->register_for_event(SCS_TELEMETRY_EVENT_configuration, OnTelemetryConfiguration, nullptr) == SCS_RESULT_ok);
-
-    if (!events_ok) {
-        LogToGame(SCS_LOG_TYPE_error, "[NismaraTracker] Failed to register core telemetry events.");
-        g_game_log = nullptr;
-        return SCS_RESULT_generic_error;
-    }
-
-    // Gameplay events require Telemetry SDK v1.01+
-    if (version >= SCS_TELEMETRY_VERSION_1_01) {
-        version_params->register_for_event(SCS_TELEMETRY_EVENT_gameplay, OnTelemetryGameplayEvent, nullptr);
-    }
-
-    // Register periodic channels for truck mechanical metrics, world position, and wear
-    const scs_u32_t flags = SCS_TELEMETRY_CHANNEL_FLAG_no_value;
-
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_speed, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelSpeed, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_rpm, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelRpm, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_gear, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelEngineGear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_displayed_gear, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelDisplayedGear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_enabled, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelEngineEnabled, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_electric_enabled, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelElectricEnabled, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelAmount, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_range, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelRange, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_odometer, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelOdometer, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_parking_brake, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelParkingBrake, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_cruise_control, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelCruiseControl, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_motor_brake, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelMotorBrake, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_retarder_level, SCS_U32_NIL, SCS_VALUE_TYPE_u32, flags, OnChannelRetarder, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_light_high_beam, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelHighBeam, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_hazard_warning, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelHazard, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_differential_lock, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelDiffLock, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_warning, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelFuelWarning, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_average_consumption, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelAvgConsumption, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_speed_limit, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelSpeedLimit, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_oil_temperature, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelOilTemp, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_water_temperature, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWaterTemp, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_brake_air_pressure, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelBrakeAirPressure, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_battery_voltage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelBatteryVoltage, nullptr);
-
-    // World space position & orientation (dplacement)
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_world_placement, SCS_U32_NIL, SCS_VALUE_TYPE_dplacement, flags, OnChannelWorldPlacement, nullptr);
-
-    // Structural health / wear channels
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_cabin, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_chassis, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_wheels, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_engine, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_transmission, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-
-    version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_connected, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelTrailerConnected, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_chassis, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_body, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_wheels, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_cargo_damage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_JOB_CHANNEL_cargo_damage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
-
-    // Simulation time & navigation channels
-    version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_game_time, SCS_U32_NIL, SCS_VALUE_TYPE_u32, flags, OnChannelGameTime, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_local_scale, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelLocalScale, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_next_rest_stop, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelNextRestStop, nullptr);
-    version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_distance, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelNavigationDistance, nullptr);
-
-    // Initial Hardcore profile & mod sanity scan
-    const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
-    const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
-    nismara::core::TelemetryState::Instance().Write([&hc_status](nismara::core::TelemetrySnapshot& s) {
-        s.hardcore_profile_scanned = true;
-        s.hc_traffic_ok = hc_status.traffic_ok;
-        s.hc_fatigue_ok = hc_status.fatigue_ok;
-        s.hc_police_ok = hc_status.police_ok;
-        s.hc_parking_ok = hc_status.parking_ok;
-        s.hc_road_events_ok = hc_status.road_events_ok;
-        s.hc_rain_prob_ok = hc_status.rain_prob_ok;
-        s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
-        s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
-        s.hc_air_brake_ok = hc_status.air_brake_ok;
-        s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
-        if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
-            s.hc_forbidden_mods_list.clear();
-            for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
-                if (i > 0) s.hc_forbidden_mods_list += ", ";
-                s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+        // Auto-sync account only if Nismara Companion is actively running in background
+        try {
+            if (nismara::core::IsCompanionAppRunning() &&
+                !nismara::core::ConfigManager::Instance().GetConfig().driver_token.empty()) {
+                nismara::core::ApiClient::Instance().SyncAccountAsync();
             }
+        } catch (...) {}
+
+        // Store game identity & engine version
+        const std::string game_id = version_params->common.game_id ? version_params->common.game_id : "unknown";
+        const std::string game_name = version_params->common.game_name ? version_params->common.game_name : "SCS Game";
+        const uint32_t major_ver = SCS_GET_MAJOR_VERSION(version_params->common.game_version);
+        const uint32_t minor_ver = SCS_GET_MINOR_VERSION(version_params->common.game_version);
+
+        nismara::core::TelemetryState::Instance().Write([&](nismara::core::TelemetrySnapshot& s) {
+            s.game_id = game_id;
+            s.game_name = game_name;
+            s.game_version_major = major_ver;
+            s.game_version_minor = minor_ver;
+            s.sdk_active = true;
+            s.is_paused = true;
+        });
+
+        // Start background Server & Multiplayer Detector (Singleplayer / Convoy / TruckersMP / HaulMP)
+        try {
+            nismara::core::ServerDetector::Instance().Initialize();
+        } catch (...) {}
+
+        // Register core lifecycle & configuration events
+        const bool events_ok =
+            (version_params->register_for_event(SCS_TELEMETRY_EVENT_paused, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
+            (version_params->register_for_event(SCS_TELEMETRY_EVENT_started, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
+            (version_params->register_for_event(SCS_TELEMETRY_EVENT_configuration, OnTelemetryConfiguration, nullptr) == SCS_RESULT_ok);
+
+        if (!events_ok) {
+            LogToGame(SCS_LOG_TYPE_error, "[NismaraTracker] Failed to register core telemetry events.");
+            g_game_log = nullptr;
+            return SCS_RESULT_generic_error;
         }
-    });
 
-    LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] NISMARA OS v1.0 Telemetry initialized for '%s' (SDK v%u.%u). Press F11 to toggle tablet.",
-              game_id.c_str(), major_ver, minor_ver);
+        // Gameplay events require Telemetry SDK v1.01+
+        if (version >= SCS_TELEMETRY_VERSION_1_01) {
+            version_params->register_for_event(SCS_TELEMETRY_EVENT_gameplay, OnTelemetryGameplayEvent, nullptr);
+        }
 
-    return SCS_RESULT_ok;
+        // Register periodic channels for truck mechanical metrics, world position, and wear
+        const scs_u32_t flags = SCS_TELEMETRY_CHANNEL_FLAG_no_value;
+
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_speed, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelSpeed, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_rpm, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelRpm, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_gear, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelEngineGear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_displayed_gear, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelDisplayedGear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_enabled, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelEngineEnabled, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_electric_enabled, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelElectricEnabled, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelAmount, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_range, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelRange, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_odometer, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelOdometer, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_parking_brake, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelParkingBrake, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_cruise_control, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelCruiseControl, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_motor_brake, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelMotorBrake, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_retarder_level, SCS_U32_NIL, SCS_VALUE_TYPE_u32, flags, OnChannelRetarder, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_light_high_beam, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelHighBeam, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_hazard_warning, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelHazard, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_differential_lock, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelDiffLock, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_warning, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelFuelWarning, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_fuel_average_consumption, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelFuelAvgConsumption, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_speed_limit, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelSpeedLimit, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_oil_temperature, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelOilTemp, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_water_temperature, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWaterTemp, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_brake_air_pressure, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelBrakeAirPressure, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_battery_voltage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelBatteryVoltage, nullptr);
+
+        // World space position & orientation (dplacement)
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_world_placement, SCS_U32_NIL, SCS_VALUE_TYPE_dplacement, flags, OnChannelWorldPlacement, nullptr);
+
+        // Structural health / wear channels
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_cabin, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_chassis, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_wheels, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_engine, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_wear_transmission, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+
+        version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_connected, SCS_U32_NIL, SCS_VALUE_TYPE_bool, flags, OnChannelTrailerConnected, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_chassis, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_body, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_wear_wheels, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRAILER_CHANNEL_cargo_damage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_JOB_CHANNEL_cargo_damage, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelWear, nullptr);
+
+        // Simulation time & navigation channels
+        version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_game_time, SCS_U32_NIL, SCS_VALUE_TYPE_u32, flags, OnChannelGameTime, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_local_scale, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelLocalScale, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_CHANNEL_next_rest_stop, SCS_U32_NIL, SCS_VALUE_TYPE_s32, flags, OnChannelNextRestStop, nullptr);
+        version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_navigation_distance, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelNavigationDistance, nullptr);
+
+        // Initial Hardcore profile & mod sanity scan
+        try {
+            const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
+            const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
+            nismara::core::TelemetryState::Instance().Write([&hc_status](nismara::core::TelemetrySnapshot& s) {
+                s.hardcore_profile_scanned = true;
+                s.hc_traffic_ok = hc_status.traffic_ok;
+                s.hc_fatigue_ok = hc_status.fatigue_ok;
+                s.hc_police_ok = hc_status.police_ok;
+                s.hc_parking_ok = hc_status.parking_ok;
+                s.hc_road_events_ok = hc_status.road_events_ok;
+                s.hc_rain_prob_ok = hc_status.rain_prob_ok;
+                s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
+                s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
+                s.hc_air_brake_ok = hc_status.air_brake_ok;
+                s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
+                if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
+                    s.hc_forbidden_mods_list.clear();
+                    for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
+                        if (i > 0) s.hc_forbidden_mods_list += ", ";
+                        s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+                    }
+                }
+            });
+        } catch (...) {}
+
+        LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] NISMARA OS v1.0 Telemetry initialized for '%s' (SDK v%u.%u). Press F11 to toggle tablet.",
+                  game_id.c_str(), major_ver, minor_ver);
+
+        return SCS_RESULT_ok;
+    } catch (const std::exception& ex) {
+        LogToGame(SCS_LOG_TYPE_error, "[NismaraTracker] Standard exception during init: %s", ex.what());
+        return SCS_RESULT_ok;
+    } catch (...) {
+        LogToGame(SCS_LOG_TYPE_error, "[NismaraTracker] Unexpected exception during init.");
+        return SCS_RESULT_ok;
+    }
 }
 
 SCSAPI_VOID scs_telemetry_shutdown(void) {
-    LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] Shutting down telemetry session.");
-    nismara::core::ServerDetector::Instance().Shutdown();
-    g_game_log = nullptr;
-    nismara::core::TelemetryState::Instance().Reset();
+    try {
+        LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] Shutting down telemetry session.");
+        nismara::core::ServerDetector::Instance().Shutdown();
+        g_game_log = nullptr;
+        nismara::core::TelemetryState::Instance().Reset();
+    } catch (...) {}
 }
 
 SCSSDK_FOOTER

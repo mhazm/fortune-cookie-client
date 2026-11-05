@@ -266,20 +266,24 @@ void ServerDetector::RequestImmediateScan() {
 }
 
 void ServerDetector::WorkerLoop() {
-    PerformScan();
+    try {
+        PerformScan();
 
-    int elapsed_ticks = 0;
-    while (running_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        if (!running_.load()) {
-            break;
+        int elapsed_ticks = 0;
+        while (running_.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            if (!running_.load()) {
+                break;
+            }
+            ++elapsed_ticks;
+            if (force_scan_.exchange(false) || elapsed_ticks >= 10) { // Every 2.5 seconds
+                elapsed_ticks = 0;
+                try {
+                    PerformScan();
+                } catch (...) {}
+            }
         }
-        ++elapsed_ticks;
-        if (force_scan_.exchange(false) || elapsed_ticks >= 10) { // Every 2.5 seconds
-            elapsed_ticks = 0;
-            PerformScan();
-        }
-    }
+    } catch (...) {}
 }
 
 void ServerDetector::PerformScan() {

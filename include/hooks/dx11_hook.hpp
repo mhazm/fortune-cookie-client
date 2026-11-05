@@ -21,6 +21,16 @@ class Dx11Hook {
 public:
     static Dx11Hook& Instance();
 
+    using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
+    using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
+    using SetCursorPosFn = BOOL(WINAPI*)(int, int);
+    using ClipCursorFn = BOOL(WINAPI*)(const RECT*);
+    using DIAcquireFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*);
+    using DIUnacquireFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*);
+    using DIGetDeviceStateFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*, DWORD, LPVOID);
+    using DIGetDeviceDataFn =
+        HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
+
     Dx11Hook(const Dx11Hook&) = delete;
     Dx11Hook& operator=(const Dx11Hook&) = delete;
 
@@ -84,16 +94,6 @@ private:
         LPDIDEVICEOBJECTDATA rgdod,
         LPDWORD pdw_in_out,
         DWORD dw_flags);
-
-    using PresentFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT);
-    using ResizeBuffersFn = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
-    using SetCursorPosFn = BOOL(WINAPI*)(int, int);
-    using ClipCursorFn = BOOL(WINAPI*)(const RECT*);
-    using DIAcquireFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*);
-    using DIUnacquireFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*);
-    using DIGetDeviceStateFn = HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*, DWORD, LPVOID);
-    using DIGetDeviceDataFn =
-        HRESULT(STDMETHODCALLTYPE*)(IDirectInputDevice8W*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
 
     PresentFn original_present_{nullptr};
     ResizeBuffersFn original_resize_buffers_{nullptr};

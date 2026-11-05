@@ -60,13 +60,17 @@ jobs:
         with:
           workspaces: 'nismara-companion/src-tauri -> target'
 
-      # Ensure companion resources folder and placeholder DLL exist across all platforms
+      # Ensure companion resources folders and placeholder DLL exist across all platforms
       - name: Prepare Companion resources directory
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "nismara-companion/resources"
+          New-Item -ItemType Directory -Force -Path "nismara-companion/src-tauri/resources"
           if (!(Test-Path "nismara-companion/resources/NismaraTracker.dll")) {
             New-Item -ItemType File -Force -Path "nismara-companion/resources/NismaraTracker.dll"
+          }
+          if (!(Test-Path "nismara-companion/src-tauri/resources/NismaraTracker.dll")) {
+            New-Item -ItemType File -Force -Path "nismara-companion/src-tauri/resources/NismaraTracker.dll"
           }
 
       # Linux-specific build dependencies for Tauri v2
@@ -93,12 +97,15 @@ jobs:
           cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
           New-Item -ItemType Directory -Force -Path "nismara-companion/resources"
-          if (Test-Path "bin/Release/NismaraTracker.dll") {
-            Copy-Item -Path "bin/Release/NismaraTracker.dll" -Destination "nismara-companion/resources/NismaraTracker.dll" -Force
-          } elseif (Test-Path "bin/NismaraTracker.dll") {
-            Copy-Item -Path "bin/NismaraTracker.dll" -Destination "nismara-companion/resources/NismaraTracker.dll" -Force
+          New-Item -ItemType Directory -Force -Path "nismara-companion/src-tauri/resources"
+          $builtDll = if (Test-Path "bin/Release/NismaraTracker.dll") { "bin/Release/NismaraTracker.dll" } elseif (Test-Path "bin/NismaraTracker.dll") { "bin/NismaraTracker.dll" } else { $null }
+          if ($builtDll) {
+            Copy-Item -Path $builtDll -Destination "nismara-companion/resources/NismaraTracker.dll" -Force
+            Copy-Item -Path $builtDll -Destination "nismara-companion/src-tauri/resources/NismaraTracker.dll" -Force
+            Write-Host "Successfully compiled NismaraTracker.dll and copied to both companion resources directories."
+          } else {
+            Write-Error "NismaraTracker.dll not found after build!"
           }
-          Write-Host "Successfully compiled NismaraTracker.dll and copied to resources."
 
       - name: Install frontend dependencies
         working-directory: ./nismara-companion

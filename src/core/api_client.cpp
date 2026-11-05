@@ -387,7 +387,8 @@ void ApiClient::ExecutePointsWorker(
     std::string json_body,
     std::string action_type) {
     (void)action_type;
-    const auto cfg = ConfigManager::Instance().GetConfig();
+    try {
+        const auto cfg = ConfigManager::Instance().GetConfig();
     if (cfg.driver_token.empty() || cfg.api_base_url.empty()) {
         return;
     }
@@ -522,13 +523,21 @@ void ApiClient::ExecutePointsWorker(
             acc.penalty_action_time_remaining = 5.0f;
         });
     }
+    } catch (...) {
+        TelemetryState::Instance().WriteDriverAccount([](DriverAccountProfile& acc) {
+            acc.penalty_action_message = "Gagal memproses permintaan (exception).";
+            acc.penalty_action_is_error = true;
+            acc.penalty_action_time_remaining = 5.0f;
+        });
+    }
 }
 
 void ApiClient::ExecuteJobPostWorker(
     std::string endpoint,
     std::string json_body,
     std::string event_kind) {
-    const auto cfg = ConfigManager::Instance().GetConfig();
+    try {
+        const auto cfg = ConfigManager::Instance().GetConfig();
     if (cfg.driver_token.empty() || cfg.api_base_url.empty()) {
         return;
     }
@@ -757,6 +766,7 @@ void ApiClient::ExecuteJobPostWorker(
         // Refresh driver penalty points
         SyncAccountAsync();
     }
+    } catch (...) {}
 }
 
 void ApiClient::ExecuteSyncWorker(
@@ -769,7 +779,8 @@ void ApiClient::ExecuteSyncWorker(
         ~ScopeGuard() { flag.store(false); }
     } guard{is_syncing_};
 
-    const std::string full_url = base_url + "/api/tracker/me";
+    try {
+        const std::string full_url = base_url + "/api/tracker/me";
     const std::wstring wide_url = Utf8ToWide(full_url);
 
     URL_COMPONENTS url_comp = {};
@@ -1102,6 +1113,12 @@ void ApiClient::ExecuteSyncWorker(
 
     // Immediately match the driver's synced fleets against the currently driven in-game vehicle
     TelemetryState::Instance().MatchActiveFleet();
+    } catch (...) {
+        TelemetryState::Instance().WriteDriverAccount([](DriverAccountProfile& acc) {
+            acc.status = AccountSyncStatus::NetworkError;
+            acc.status_message = "Unexpected error while synchronizing profile.";
+        });
+    }
 }
 
 void ApiClient::ExecuteWallpaperDownloadWorker(
@@ -1113,7 +1130,8 @@ void ApiClient::ExecuteWallpaperDownloadWorker(
         ~ScopeGuard() { flag.store(false); }
     } guard{is_downloading_wallpaper_};
 
-    const std::wstring wide_url = Utf8ToWide(url);
+    try {
+        const std::wstring wide_url = Utf8ToWide(url);
 
     URL_COMPONENTS url_comp = {};
     url_comp.dwStructSize = sizeof(url_comp);
@@ -1246,6 +1264,9 @@ void ApiClient::ExecuteWallpaperDownloadWorker(
     nismara::ui::TextureManager::Instance().RequestReload();
 
     SetWallpaperStatus("Wallpaper downloaded & applied (" + filename + ")!");
+    } catch (...) {
+        SetWallpaperStatus("Failed to download wallpaper.");
+    }
 }
 
 } // namespace nismara::core

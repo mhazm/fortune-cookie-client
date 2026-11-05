@@ -117,104 +117,108 @@ void Dx11Hook::OnOverlayVisibilityChanged(bool visible) {
 }
 
 void Dx11Hook::WorkerThreadProc() {
-    // Enforce initial delay of 4 seconds (40 x 100ms) to avoid race conditions
-    // with TruckersMP, DihaulMP, and Steam overlays during startup.
-    for (int i = 0; i < 40; ++i) {
-        if (stop_requested_.load()) {
+    try {
+        // Enforce initial delay of 4 seconds (40 x 100ms) to avoid race conditions
+        // with TruckersMP, DihaulMP, and Steam overlays during startup.
+        for (int i = 0; i < 40; ++i) {
+            if (stop_requested_.load()) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        void* present_addr = nullptr;
+        void* resize_addr = nullptr;
+
+        // Retry extracting dummy swapchain up to 10 times if the game window/DX11 is still initializing
+        for (int attempt = 0; attempt < 10 && !stop_requested_.load(); ++attempt) {
+            if (ExtractSwapChainVTable(&present_addr, &resize_addr)) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        if (stop_requested_.load() || present_addr == nullptr) {
             return;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
 
-    void* present_addr = nullptr;
-    void* resize_addr = nullptr;
-
-    // Retry extracting dummy swapchain up to 10 times if the game window/DX11 is still initializing
-    for (int attempt = 0; attempt < 10 && !stop_requested_.load(); ++attempt) {
-        if (ExtractSwapChainVTable(&present_addr, &resize_addr)) {
-            break;
+        if (MH_Initialize() != MH_OK) {
+            return;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    }
 
-    if (stop_requested_.load() || present_addr == nullptr) {
-        return;
-    }
+        // 1. Hook IDXGISwapChain::Present and IDXGISwapChain::ResizeBuffers
+        if (MH_CreateHook(
+                present_addr,
+                reinterpret_cast<LPVOID>(&Dx11Hook::HookedPresent),
+                reinterpret_cast<LPVOID*>(&original_present_)) != MH_OK) {
+            MH_Uninitialize();
+            return;
+        }
 
-    if (MH_Initialize() != MH_OK) {
-        return;
-    }
-
-    // 1. Hook IDXGISwapChain::Present and IDXGISwapChain::ResizeBuffers
-    if (MH_CreateHook(
-            present_addr,
-            reinterpret_cast<LPVOID>(&Dx11Hook::HookedPresent),
-            reinterpret_cast<LPVOID*>(&original_present_)) != MH_OK) {
-        MH_Uninitialize();
-        return;
-    }
-
-    if (resize_addr != nullptr) {
-        MH_CreateHook(
-            resize_addr,
-            reinterpret_cast<LPVOID>(&Dx11Hook::HookedResizeBuffers),
-            reinterpret_cast<LPVOID*>(&original_resize_buffers_));
-    }
-
-    // 2. Hook user32.dll!SetCursorPos and user32.dll!ClipCursor so ETS2/ATS cannot
-    //    force the OS cursor back to the center of the window while the tablet is open.
-    HMODULE user32_mod = GetModuleHandleW(L"user32.dll");
-    if (user32_mod != nullptr) {
-        void* set_cursor_pos_addr = reinterpret_cast<void*>(GetProcAddress(user32_mod, "SetCursorPos"));
-        if (set_cursor_pos_addr != nullptr) {
+        if (resize_addr != nullptr) {
             MH_CreateHook(
-                set_cursor_pos_addr,
-                reinterpret_cast<LPVOID>(&Dx11Hook::HookedSetCursorPos),
-                reinterpret_cast<LPVOID*>(&original_set_cursor_pos_));
+                resize_addr,
+                reinterpret_cast<LPVOID>(&Dx11Hook::HookedResizeBuffers),
+                reinterpret_cast<LPVOID*>(&original_resize_buffers_));
         }
 
-        void* clip_cursor_addr = reinterpret_cast<void*>(GetProcAddress(user32_mod, "ClipCursor"));
-        if (clip_cursor_addr != nullptr) {
-            MH_CreateHook(
-                clip_cursor_addr,
-                reinterpret_cast<LPVOID>(&Dx11Hook::HookedClipCursor),
-                reinterpret_cast<LPVOID*>(&original_clip_cursor_));
-        }
-    }
+        // 2. Hook user32.dll!SetCursorPos and user32.dll!ClipCursor so ETS2/ATS cannot
+        //    force the OS cursor back to the center of the window while the tablet is open.
+        HMODULE user32_mod = GetModuleHandleW(L"user32.dll");
+        if (user32_mod != nullptr) {
+            void* set_cursor_pos_addr = reinterpret_cast<void*>(GetProcAddress(user32_mod, "SetCursorPos"));
+            if (set_cursor_pos_addr != nullptr) {
+                MH_CreateHook(
+                    set_cursor_pos_addr,
+                    reinterpret_cast<LPVOID>(&Dx11Hook::HookedSetCursorPos),
+                    reinterpret_cast<LPVOID*>(&original_set_cursor_pos_));
+            }
 
-    // 3. Hook DirectInput8 (IDirectInputDevice8W) so exclusive mouse lock is released
-    //    and cabin camera rotation is suppressed while interacting with the tablet.
-    void* di_acquire_addr = nullptr;
-    void* di_unacquire_addr = nullptr;
-    void* di_get_state_addr = nullptr;
-    void* di_get_data_addr = nullptr;
-    if (ExtractDirectInputVTable(&di_acquire_addr, &di_unacquire_addr, &di_get_state_addr, &di_get_data_addr)) {
-        original_di_unacquire_ = reinterpret_cast<DIUnacquireFn>(di_unacquire_addr);
+            void* clip_cursor_addr = reinterpret_cast<void*>(GetProcAddress(user32_mod, "ClipCursor"));
+            if (clip_cursor_addr != nullptr) {
+                MH_CreateHook(
+                    clip_cursor_addr,
+                    reinterpret_cast<LPVOID>(&Dx11Hook::HookedClipCursor),
+                    reinterpret_cast<LPVOID*>(&original_clip_cursor_));
+            }
+        }
 
-        if (di_acquire_addr != nullptr) {
-            MH_CreateHook(
-                di_acquire_addr,
-                reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIAcquire),
-                reinterpret_cast<LPVOID*>(&original_di_acquire_));
-        }
-        if (di_get_state_addr != nullptr) {
-            MH_CreateHook(
-                di_get_state_addr,
-                reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIGetDeviceState),
-                reinterpret_cast<LPVOID*>(&original_di_get_device_state_));
-        }
-        if (di_get_data_addr != nullptr) {
-            MH_CreateHook(
-                di_get_data_addr,
-                reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIGetDeviceData),
-                reinterpret_cast<LPVOID*>(&original_di_get_device_data_));
-        }
-    }
+        // 3. Hook DirectInput8 (IDirectInputDevice8W) so exclusive mouse lock is released
+        //    and cabin camera rotation is suppressed while interacting with the tablet.
+        void* di_acquire_addr = nullptr;
+        void* di_unacquire_addr = nullptr;
+        void* di_get_state_addr = nullptr;
+        void* di_get_data_addr = nullptr;
+        if (ExtractDirectInputVTable(&di_acquire_addr, &di_unacquire_addr, &di_get_state_addr, &di_get_data_addr)) {
+            original_di_unacquire_ = reinterpret_cast<DIUnacquireFn>(di_unacquire_addr);
 
-    if (MH_EnableHook(MH_ALL_HOOKS) == MH_OK) {
-        hook_installed_.store(true);
-    } else {
-        MH_Uninitialize();
+            if (di_acquire_addr != nullptr) {
+                MH_CreateHook(
+                    di_acquire_addr,
+                    reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIAcquire),
+                    reinterpret_cast<LPVOID*>(&original_di_acquire_));
+            }
+            if (di_get_state_addr != nullptr) {
+                MH_CreateHook(
+                    di_get_state_addr,
+                    reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIGetDeviceState),
+                    reinterpret_cast<LPVOID*>(&original_di_get_device_state_));
+            }
+            if (di_get_data_addr != nullptr) {
+                MH_CreateHook(
+                    di_get_data_addr,
+                    reinterpret_cast<LPVOID>(&Dx11Hook::HookedDIGetDeviceData),
+                    reinterpret_cast<LPVOID*>(&original_di_get_device_data_));
+            }
+        }
+
+        if (MH_EnableHook(MH_ALL_HOOKS) == MH_OK) {
+            hook_installed_.store(true);
+        } else {
+            MH_Uninitialize();
+        }
+    } catch (...) {
+        // Must never allow background thread exception to terminate host game
     }
 }
 
@@ -364,6 +368,103 @@ bool Dx11Hook::ExtractDirectInputVTable(
     return success;
 }
 
+namespace {
+
+inline HRESULT SafeCallPresent(
+    Dx11Hook::PresentFn fn,
+    IDXGISwapChain* swap_chain,
+    UINT sync_interval,
+    UINT flags) {
+    __try {
+        return fn(swap_chain, sync_interval, flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return S_OK;
+    }
+}
+
+inline HRESULT SafeCallResizeBuffers(
+    Dx11Hook::ResizeBuffersFn fn,
+    IDXGISwapChain* swap_chain,
+    UINT buffer_count,
+    UINT width,
+    UINT height,
+    DXGI_FORMAT new_format,
+    UINT swap_chain_flags) {
+    __try {
+        return fn(swap_chain, buffer_count, width, height, new_format, swap_chain_flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return S_OK;
+    }
+}
+
+inline BOOL SafeCallSetCursorPos(Dx11Hook::SetCursorPosFn fn, int x, int y) {
+    __try {
+        return fn(x, y);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return TRUE;
+    }
+}
+
+inline BOOL SafeCallClipCursor(Dx11Hook::ClipCursorFn fn, const RECT* rect) {
+    __try {
+        return fn(rect);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return TRUE;
+    }
+}
+
+inline HRESULT SafeCallDIAcquire(Dx11Hook::DIAcquireFn fn, IDirectInputDevice8W* device) {
+    __try {
+        return fn(device);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIUnacquire(Dx11Hook::DIUnacquireFn fn, IDirectInputDevice8W* device) {
+    __try {
+        return fn(device);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIGetDeviceState(
+    Dx11Hook::DIGetDeviceStateFn fn,
+    IDirectInputDevice8W* device,
+    DWORD cb_data,
+    LPVOID lpv_data) {
+    __try {
+        return fn(device, cb_data, lpv_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIGetDeviceData(
+    Dx11Hook::DIGetDeviceDataFn fn,
+    IDirectInputDevice8W* device,
+    DWORD cb_object_data,
+    LPDIDEVICEOBJECTDATA rgdod,
+    LPDWORD pdw_in_out,
+    DWORD dw_flags) {
+    __try {
+        return fn(device, cb_object_data, rgdod, pdw_in_out, dw_flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline bool SafeCheckMouseCaps(IDirectInputDevice8W* device, DIDEVCAPS* caps) {
+    __try {
+        return SUCCEEDED(device->GetCapabilities(caps));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+} // namespace
+
 bool Dx11Hook::IsMouseDevice(IDirectInputDevice8W* device) {
     if (device == nullptr) {
         return false;
@@ -374,7 +475,7 @@ bool Dx11Hook::IsMouseDevice(IDirectInputDevice8W* device) {
 
     DIDEVCAPS caps = {};
     caps.dwSize = sizeof(DIDEVCAPS);
-    if (SUCCEEDED(device->GetCapabilities(&caps))) {
+    if (SafeCheckMouseCaps(device, &caps)) {
         const BYTE dev_type = LOBYTE(caps.dwDevType);
         // DI8DEVTYPE_MOUSE (0x12) or legacy DIDEVTYPE_MOUSE (2)
         if (dev_type == DI8DEVTYPE_MOUSE || dev_type == 2) {
@@ -448,28 +549,40 @@ BOOL WINAPI Dx11Hook::HookedSetCursorPos(int x, int y) {
         // Prevent the game from resetting the OS cursor back to the center of the window
         return TRUE;
     }
-    return self.original_set_cursor_pos_(x, y);
+    if (self.original_set_cursor_pos_ != nullptr) {
+        return SafeCallSetCursorPos(self.original_set_cursor_pos_, x, y);
+    }
+    return SetCursorPos(x, y);
 }
 
 BOOL WINAPI Dx11Hook::HookedClipCursor(const RECT* rect) {
     auto& self = Dx11Hook::Instance();
     if (!self.shutting_down_.load() && nismara::ui::TabletGui::Instance().IsVisible()) {
         // Keep cursor unclipped while tablet overlay is open
-        return self.original_clip_cursor_(nullptr);
+        if (self.original_clip_cursor_ != nullptr) {
+            SafeCallClipCursor(self.original_clip_cursor_, nullptr);
+        }
+        return ClipCursor(nullptr);
     }
-    return self.original_clip_cursor_(rect);
+    if (self.original_clip_cursor_ != nullptr) {
+        return SafeCallClipCursor(self.original_clip_cursor_, rect);
+    }
+    return ClipCursor(rect);
 }
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIAcquire(IDirectInputDevice8W* device) {
     auto& self = Dx11Hook::Instance();
     if (!self.shutting_down_.load() && nismara::ui::TabletGui::Instance().IsVisible() && IsMouseDevice(device)) {
         if (self.original_di_unacquire_ != nullptr) {
-            self.original_di_unacquire_(device);
+            SafeCallDIUnacquire(self.original_di_unacquire_, device);
         }
         self.mouse_unacquired_for_overlay_.store(true);
         return DI_OK;
     }
-    return self.original_di_acquire_(device);
+    if (self.original_di_acquire_ != nullptr) {
+        return SafeCallDIAcquire(self.original_di_acquire_, device);
+    }
+    return DI_OK;
 }
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceState(
@@ -487,7 +600,7 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceState(
         if (nismara::ui::TabletGui::Instance().IsVisible()) {
             if (is_mouse) {
                 if (self.original_di_unacquire_ != nullptr) {
-                    self.original_di_unacquire_(device);
+                    SafeCallDIUnacquire(self.original_di_unacquire_, device);
                 }
                 self.mouse_unacquired_for_overlay_.store(true);
                 if (lpv_data != nullptr && cb_data > 0) {
@@ -505,12 +618,15 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceState(
             }
         } else if (is_mouse && self.mouse_unacquired_for_overlay_.exchange(false)) {
             if (self.original_di_acquire_ != nullptr) {
-                self.original_di_acquire_(device);
+                SafeCallDIAcquire(self.original_di_acquire_, device);
             }
         }
     }
 
-    return self.original_di_get_device_state_(device, cb_data, lpv_data);
+    if (self.original_di_get_device_state_ != nullptr) {
+        return SafeCallDIGetDeviceState(self.original_di_get_device_state_, device, cb_data, lpv_data);
+    }
+    return DI_OK;
 }
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceData(
@@ -526,7 +642,7 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceData(
         if (nismara::ui::TabletGui::Instance().IsVisible()) {
             if (is_mouse) {
                 if (self.original_di_unacquire_ != nullptr) {
-                    self.original_di_unacquire_(device);
+                    SafeCallDIUnacquire(self.original_di_unacquire_, device);
                 }
                 self.mouse_unacquired_for_overlay_.store(true);
                 if (pdw_in_out != nullptr) {
@@ -543,53 +659,62 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceData(
             }
         } else if (is_mouse && self.mouse_unacquired_for_overlay_.exchange(false)) {
             if (self.original_di_acquire_ != nullptr) {
-                self.original_di_acquire_(device);
+                SafeCallDIAcquire(self.original_di_acquire_, device);
             }
         }
     }
 
-    return self.original_di_get_device_data_(device, cb_object_data, rgdod, pdw_in_out, dw_flags);
+    if (self.original_di_get_device_data_ != nullptr) {
+        return SafeCallDIGetDeviceData(self.original_di_get_device_data_, device, cb_object_data, rgdod, pdw_in_out, dw_flags);
+    }
+    return DI_OK;
 }
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedPresent(IDXGISwapChain* swap_chain, UINT sync_interval, UINT flags) {
     auto& self = Dx11Hook::Instance();
 
-    if (self.shutting_down_.load()) {
-        return self.original_present_(swap_chain, sync_interval, flags);
+    if (self.shutting_down_.load() || self.original_present_ == nullptr) {
+        return (self.original_present_ != nullptr)
+            ? SafeCallPresent(self.original_present_, swap_chain, sync_interval, flags)
+            : S_OK;
     }
 
-    if (!self.imgui_initialized_.load()) {
-        self.InitializeImGui(swap_chain);
-    }
-
-    if (self.imgui_initialized_.load() && self.context_ != nullptr) {
-        if (self.main_rtv_ == nullptr) {
-            self.CreateRenderTarget(swap_chain);
+    try {
+        if (!self.imgui_initialized_.load()) {
+            self.InitializeImGui(swap_chain);
         }
 
-        if (self.main_rtv_ != nullptr) {
-            const bool tablet_visible = nismara::ui::TabletGui::Instance().IsVisible();
-            if (tablet_visible != self.last_frame_visible_) {
-                self.last_frame_visible_ = tablet_visible;
-                self.OnOverlayVisibilityChanged(tablet_visible);
+        if (self.imgui_initialized_.load() && self.context_ != nullptr) {
+            if (self.main_rtv_ == nullptr) {
+                self.CreateRenderTarget(swap_chain);
             }
 
-            if (tablet_visible) {
-                ImGui_ImplDX11_NewFrame();
-                ImGui_ImplWin32_NewFrame();
-                ImGui::NewFrame();
+            if (self.main_rtv_ != nullptr) {
+                const bool tablet_visible = nismara::ui::TabletGui::Instance().IsVisible();
+                if (tablet_visible != self.last_frame_visible_) {
+                    self.last_frame_visible_ = tablet_visible;
+                    self.OnOverlayVisibilityChanged(tablet_visible);
+                }
 
-                ImGui::GetIO().MouseDrawCursor = true;
-                nismara::ui::TabletGui::Instance().Render();
+                if (tablet_visible) {
+                    ImGui_ImplDX11_NewFrame();
+                    ImGui_ImplWin32_NewFrame();
+                    ImGui::NewFrame();
 
-                ImGui::Render();
-                self.context_->OMSetRenderTargets(1, &self.main_rtv_, nullptr);
-                ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                    ImGui::GetIO().MouseDrawCursor = true;
+                    nismara::ui::TabletGui::Instance().Render();
+
+                    ImGui::Render();
+                    self.context_->OMSetRenderTargets(1, &self.main_rtv_, nullptr);
+                    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+                }
             }
         }
+    } catch (...) {
+        // Overlay rendering error must never take down the swap chain
     }
 
-    return self.original_present_(swap_chain, sync_interval, flags);
+    return SafeCallPresent(self.original_present_, swap_chain, sync_interval, flags);
 }
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedResizeBuffers(
@@ -600,8 +725,21 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedResizeBuffers(
     DXGI_FORMAT new_format,
     UINT swap_chain_flags) {
     auto& self = Dx11Hook::Instance();
-    self.CleanupRenderTarget();
-    return self.original_resize_buffers_(swap_chain, buffer_count, width, height, new_format, swap_chain_flags);
+    try {
+        self.CleanupRenderTarget();
+    } catch (...) {}
+
+    if (self.original_resize_buffers_ != nullptr) {
+        return SafeCallResizeBuffers(
+            self.original_resize_buffers_,
+            swap_chain,
+            buffer_count,
+            width,
+            height,
+            new_format,
+            swap_chain_flags);
+    }
+    return S_OK;
 }
 
 } // namespace nismara::hooks

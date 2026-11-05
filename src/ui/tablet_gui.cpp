@@ -647,9 +647,9 @@ void TabletGui::LoadTrueTypeFonts() {
     const std::string semibold_path = pick_existing({"segoeuib.ttf", "seguisb.ttf", "arialbd.ttf", "tahomabd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "SFNS.ttf"});
     const std::string clock_path    = pick_existing({"segoeuib.ttf", "seguisb.ttf", "segoeui.ttf", "arialbd.ttf", "tahomabd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"});
 
-    ImFontConfig cfg = {};
-    cfg.OversampleH = 3;
-    cfg.OversampleV = 2;
+    ImFontConfig cfg;
+    cfg.OversampleH = 2;
+    cfg.OversampleV = 1;
     cfg.PixelSnapH = true;
 
     if (!regular_path.empty()) {

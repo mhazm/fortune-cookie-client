@@ -11,6 +11,20 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+namespace {
+LRESULT SafeCallWindowProc(WNDPROC proc, bool is_unicode, HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
+    if (proc == nullptr) {
+        return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+    }
+    __try {
+        return is_unicode ? CallWindowProcW(proc, hWnd, uMsg, wParam, lParam)
+                          : CallWindowProcA(proc, hWnd, uMsg, wParam, lParam);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DefWindowProcW(hWnd, uMsg, wParam, lParam);
+    }
+}
+} // namespace
+
 namespace nismara::hooks {
 
 WndProcHook& WndProcHook::Instance() {
@@ -137,10 +151,15 @@ LRESULT CALLBACK WndProcHook::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         }
     }
 
+    if (uMsg == WM_NCDESTROY) {
+        WNDPROC orig = self.original_wndproc_;
+        const bool is_unicode = self.is_unicode_;
+        self.Shutdown();
+        return SafeCallWindowProc(orig, is_unicode, hWnd, uMsg, wParam, lParam);
+    }
+
     if (self.original_wndproc_ != nullptr) {
-        return self.is_unicode_
-                   ? CallWindowProcW(self.original_wndproc_, hWnd, uMsg, wParam, lParam)
-                   : CallWindowProcA(self.original_wndproc_, hWnd, uMsg, wParam, lParam);
+        return SafeCallWindowProc(self.original_wndproc_, self.is_unicode_, hWnd, uMsg, wParam, lParam);
     }
 
     return DefWindowProcW(hWnd, uMsg, wParam, lParam);
