@@ -448,6 +448,37 @@ Jalankan perintah berikut dari direktori `d:\Project\Nismara Transport\Project\n
   ```
   Binary hasil kompilasi akan berada di folder `src-tauri/target/release/` dan file setup installer di `src-tauri/target/release/bundle/`.
 
+### C. Menjalankan & Memelihara Dedicated Tracker Server (`nismara-tracker-server`)
+Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\nismara-tracker-server`:
+- **Mode Development (Hot-Reload)**:
+  ```bash
+  npm run dev
+  ```
+- **Mode Production (Node.js Direct)**:
+  ```bash
+  npm start
+  ```
+- **Mode Production 24/7 (PM2 Process Manager)**:
+  Menggunakan `ecosystem.config.cjs` (format standar CommonJS untuk Node.js ESM) atau `ecosystem.js`:
+  ```bash
+  # Menjalankan server di background dengan PM2
+  npm run pm2:start
+
+  # Memantau log real-time
+  npm run pm2:logs
+
+  # Restart / Zero-downtime reload
+  npm run pm2:restart
+  npm run pm2:reload
+
+  # Menghentikan server
+  npm run pm2:stop
+
+  # Membuka terminal dashboard CPU / Memory
+  npm run pm2:monit
+  ```
+  Fitur otomatis di PM2 ecosystem: Auto-restart jika terjadi *unhandled crash*, batasan memori maksimum `500MB` (`max_memory_restart`), serta pencatatan log dengan timestamp terformat di folder `logs/pm2-error.log` dan `logs/pm2-out.log`.
+
 ---
 
 ## 8. Aturan Penting: DO & DON'T (Guardrails untuk AI Agent)
