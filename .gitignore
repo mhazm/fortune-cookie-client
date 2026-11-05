@@ -1,0 +1,66 @@
+# ==========================================
+# C++ Build Output & Temporary Directories
+# ==========================================
+build/
+out/
+bin/
+cmake-build-*/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.sln.docstates
+
+# Compiled binaries and libraries
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+*.o
+*.exe
+
+# ==========================================
+# Node.js & Vite Frontend
+# ==========================================
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+dist-ssr/
+**/dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==========================================
+# Rust & Tauri Build Artifacts
+# ==========================================
+target/
+**/target/
+**/src-tauri/target/
+**/src-tauri/gen/schemas/
+
+# Security / Private Keys (Minisign private keys)
+*.key
+**/nismara.key
+
+# ==========================================
+# Runtime Configs, Local Logs & Scratch
+# ==========================================
+*.dat
+*.log
+imgui.ini
+scratch/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Agent SKILL
+.agents/

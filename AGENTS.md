@@ -1,0 +1,313 @@
+# AGENTS.md — NismaraTracker & Nismara Tracker Server
+
+Dokumen ini adalah panduan arsitektur, referensi teknis, histori implementasi, serta aturan **DO & DON'T** untuk seluruh ekosistem **NismaraTracker**. Dokumen ini dirancang agar AI Agent / Model apa pun yang melanjutkan pengembangan dapat langsung memahami keseluruhan konteks proyek tanpa kehilangan detail sedikit pun.
+
+---
+
+## 1. Gambaran Umum Proyek (Project Overview)
+
+Ekosistem **NismaraTracker** terdiri dari dua repositori/komponen utama yang saling terhubung:
+
+1. **Client Plugin (`NismaraTracker.dll`)**
+   - **Lokasi**: `d:\Project\Nismara Transport\Project\nismara-tracker`
+   - **Peran**: Native C++20 (`x64`) in-game telemetry & overlay plugin untuk **Euro Truck Simulator 2 (ETS2)** dan **American Truck Simulator (ATS)**.
+   - **Bentuk Distribusi**: **Single Standalone Binary (`bin/NismaraTracker.dll`)** tanpa ketergantungan DLL eksternal (menggunakan static MSVC runtime `/MT`).
+   - **Antarmuka**: In-game GUI berbentuk **iPhone 16 OS** (dimodelkan presisi dari `IPhone_16_Vector.svg` & `Nismara Group Logo.svg`) yang dirender langsung di dalam proses DirectX 11 game (toggle dengan tombol **`F11`**).
+
+2. **Dedicated Tracker Backend (`nismara-tracker-server`)**
+   - **Lokasi**: `D:\Project\Nismara Transport\Project\nismara-tracker-server`
+   - **Peran**: Server backend mandiri berbasis **Node.js + Express + Mongoose** yang menjembatani `NismaraTracker.dll` dengan database utama MongoDB (`nismara` database).
+   - **Alasan Arsitektur**: Website utama Nismara Transport di-hosting di **Vercel** (serverless). Polling dan pengiriman telemetri/job dari plugin secara terus-menerus ke Vercel akan menguras kuota *Serverless Function Invocations* dan menyebabkan *overcost*. Oleh karena itu, seluruh komunikasi dari `NismaraTracker.dll` diarahkan ke `nismara-tracker-server` (berjalan di `http://localhost:3100` saat development atau VPS khusus saat production) dengan koneksi MongoDB pool yang persisten.
+
+---
+
+## 2. Tech Stack Lengkap
+
+### A. Client Plugin (`nismara-tracker`)
+- **Bahasa & Standar**: C++20 (`MSVC` x64, `/W4 /MP /EHsc /utf-8`, Static Runtime `/MT` di Release dan `/MTd` di Debug).
+- **Build System**: CMake (`>= 3.20`) + MSBuild (Visual Studio 2022/2026 x64).
+- **Game Telemetry API**: **SCS Telemetry SDK v1.01** (`scs-sdk/include/`).
+- **Graphics & Rendering Hook**:
+  - **DirectX 11 (`d3d11.lib`, `dxgi.lib`)**: Hooking `IDXGISwapChain::Present` (VTable index `8`) dan `IDXGISwapChain::ResizeBuffers` (VTable index `13`).
+  - **MinHook (x64)**: Digunakan untuk hooking fungsi DirectX 11, Win32 Cursor APIs, dan DirectInput8.
+  - **Dear ImGui (Docking Branch)**: Dirender di atas *render target* DX11 game dengan font TrueType asli Windows (`Segoe UI Semibold` / `Bold` / `Regular` dari `C:\Windows\Fonts`).
+- **Input & Mouse Capture Bypass**:
+  - Hooking `WndProc` (`SetWindowLongPtrW`) pada window game untuk menangkap hotkey (`F11` / `VK_F11`) dan memblokir input mouse/keyboard ke game saat layar iPhone 16 sedang aktif.
+  - Hooking Win32 `SetCursorPos`, `ClipCursor`, `GetCursorPos` serta **DirectInput8 (`IDirectInputDevice8W::GetDeviceState` & `GetDeviceData`)** agar kamera kabin truk tidak ikut berputar saat pemain menggerakkan kursor di dalam UI iPhone 16.
+- **Image & Texture Pipeline**:
+  - **Windows Imaging Component (`windowscodecs.lib` / WIC)**: Memuat custom wallpaper (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`) menjadi `ID3D11ShaderResourceView*`.
+  - **Embedded Vector Logo Mask (`include/ui/nismara_logo_data.hpp`)**: Hasil rasterisasi *64x-supersampled (8x8 MSAA)* dari `Nismara Group Logo.svg` (`360x100` alpha mask) yang di-composite langsung ke tengah default/preset wallpaper (`512x1108`).
+- **Networking & JSON**:
+  - **WinHTTP (`winhttp.lib`)**: Asynchronous HTTP/HTTPS client pada background worker thread (`std::thread`) sehingga tidak pernah memblokir render thread DX11 maupun callback SCS SDK.
+  - **nlohmann/json (`vendor/json/nlohmann/json.hpp`)**: Single-header JSON parser/serializer.
+- **Server Detection (`iphlpapi.lib`, `ws2_32.lib`, `tlhelp32.h`)**:
+  - Kombinasi pemeriksaan modul DLL yang ter-inject di memori proses game, tabel koneksi jaringan aktif, dan parsing *reverse-chronological* pada `Documents\Euro Truck Simulator 2\game.log.txt` (dan ATS).
+
+### B. Backend Server (`nismara-tracker-server`)
+- **Runtime & Framework**: Node.js + Express (`^4.21.2`) + Mongoose (`^8.10.1`) + CORS + Dotenv.
+- **Database**: MongoDB (`nismara` database) menggunakan skema koleksi yang 100% kompatibel dengan ekosistem Web (`beta.nismara.web.id`) dan Bot Discord Nismara Transport.
+
+---
+
+## 3. Struktur Direktori & Peta File
+
+### A. `d:\Project\Nismara Transport\Project\nismara-tracker`
+```text
+nismara-tracker/
+├── CMakeLists.txt                       # Konfigurasi build CMake (x64, C++20, /MT, single DLL)
+├── Nismara Group Logo.svg               # Master vector logo Nismara Group (di-bake ke nismara_logo_data.hpp)
+├── IPhone_16_Vector.svg                 # Master referensi geometri dan palet warna casing iPhone 16
+├── include/
+│   ├── core/
+│   │   ├── telemetry_state.hpp          # Thread-safe singleton penyimpanan data telemetri, akun, fleet, garage, job
+│   │   ├── scs_callbacks.hpp            # Deklarasi callback SCS SDK (frame, channel, config, gameplay events)
+│   │   ├── config_manager.hpp           # Load/save konfigurasi lokal (plugins/nismara_config.dat)
+│   │   ├── api_client.hpp               # Async WinHTTP client (/me, /jobs/start, /jobs/complete, /jobs/cancel)
+│   │   └── server_detector.hpp          # Detektor server bermain (Singleplayer, SCS Convoy, TruckersMP, HaulMP)
+│   ├── hooks/
+│   │   ├── dx11_hook.hpp                # Hook IDXGISwapChain::Present & ResizeBuffers
+│   │   └── wndproc_hook.hpp             # Hook WndProc, Win32 Cursor APIs, & DirectInput8 mouse lock bypass
+│   └── ui/
+│       ├── tablet_gui.hpp               # State & renderer utama antarmuka iPhone 16 OS
+│       ├── texture_manager.hpp          # Manajemen tekstur DX11 untuk preset & custom wallpaper
+│       └── nismara_logo_data.hpp        # Data alpha mask 64x-supersampled (360x100) dari Nismara Group Logo.svg
+├── src/
+│   ├── dllmain.cpp                      # Entry point DLL & ekspor scs_telemetry_init / scs_telemetry_shutdown
+│   ├── NismaraTracker.def               # Definisi simbol ekspor DLL untuk SCS SDK
+│   ├── core/
+│   │   ├── telemetry_state.cpp          # Implementasi thread-safe getter/setter TelemetryState
+│   │   ├── scs_callbacks.cpp            # Parser atribut SCS SDK, fleet matching, akumulasi damage, & job lifecycle
+│   │   ├── config_manager.cpp           # Parser & writer nismara_config.dat + auto-create folder plugins/wallpapers/
+│   │   ├── api_client.cpp               # Worker thread WinHTTP & JSON parsing respons backend
+│   │   └── server_detector.cpp          # Logika deteksi modul DLL (core_ets2mp.dll, haulmp_stub.dll) & game.log.txt
+│   ├── hooks/
+│   │   ├── dx11_hook.cpp                # Dummy swapchain VTable discovery, RTV lifecycle, ImGui frame loop
+│   │   └── wndproc_hook.cpp             # F11 toggle, DirectInput8 VTable hook, & pembebasan kursor di dalam game
+│   └── ui/
+│       ├── texture_manager.cpp          # Generator wallpaper procedural iOS 18 + Nismara Logo & WIC loader
+│       └── tablet_gui.cpp               # Seluruh UI iPhone 16 (Lock Screen, Home Screen, Dynamic Island, 6 Apps)
+└── bin/
+    └── NismaraTracker.dll               # Output akhir binary plugin siap pakai
+```
+
+### B. `D:\Project\Nismara Transport\Project\nismara-tracker-server`
+```text
+nismara-tracker-server/
+├── server.js                            # Entry point Express server (Port 3100) & koneksi MongoDB
+├── .env                                 # Konfigurasi PORT, MONGODB_URI, GUILD_ID, dan ekonomi reward
+└── src/
+    ├── middleware/
+    │   └── authDriver.js                # Validasi token driver (Header x-tracker-token / Authorization Bearer / Body)
+    ├── models/
+    │   ├── User.js                      # Koleksi `users` (name, discordId, trackerToken, truckyRank, steamId, dll.)
+    │   ├── Currency.js                  # Koleksi `currencies` (userId: String(discordId), guildId, totalNC, dll.)
+    │   ├── Point.js                     # Koleksi `points` (userId: String(discordId), guildId, points, level, exp)
+    │   ├── Fleet.js                     # Koleksi `fleets` (owner: ObjectId(user._id), fleet_number, in_game_id, dll.)
+    │   ├── Garage.js                    # Koleksi `garages` (owner: ObjectId(user._id), city, country, level, slots)
+    │   ├── JobHistory.js                # Koleksi `jobhistories` (jobId sekuensial "1","2",..., provider: "nismara")
+    │   ├── Cargo.js                     # Koleksi `cargos` (pencocokan kargo & multiplier harga)
+    │   ├── Fuel.js                      # Koleksi `fuels` (harga bahan bakar per liter)
+    │   ├── CurrencyBoost.js             # Koleksi `currencyboosts` (multiplier event NC/EXP aktif)
+    │   ├──CommunityGoal.js             # Koleksi `communitygoals` (kontribusi event komunitas otomatis)
+    │   └── Transaction.js               # Koleksi `transactions` (pencatatan mutasi pendapatan job NC)
+    ├── routes/
+    │   ├── me.routes.js                 # GET & POST /api/tracker/me (sinkronisasi profil, wallet, fleet, garage, ongoingJob)
+    │   └── jobs.routes.js               # POST /api/tracker/jobs/start, /complete, /cancel
+    └── services/
+        └── jobProcessor.js              # Kalkulasi finansial job, cap +10% plannedDistanceKm, update wallet/exp/fleet
+```
+
+---
+
+## 4. Aturan Skema Database MongoDB (KRITIS!)
+
+Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematuhi relasi antar-koleksi MongoDB Nismara berikut:
+
+1. **Perbedaan `user._id` vs `user.discordId`**:
+   - Koleksi **`currencies`** dan **`points`** **TIDAK** menggunakan `ObjectId(user._id)`, melainkan menggunakan:
+     - `userId: String(user.discordId)`
+     - `guildId: "863959415702028318"` (atau `process.env.NISMARA_GUILD_ID`)
+   - Koleksi **`fleets`** dan **`garages`** menggunakan:
+     - `owner: user._id` (`ObjectId`)
+2. **Koleksi `points` (POIN PENALTI DRIVER, BUKAN PRESTASI)**:
+   - Field `totalPoints` di koleksi `points` mencatat **poin penalti pelanggaran driver** (skala 0–50).
+   - Nilai ideal adalah **0** (Aman). Status: `<10` Aman (Hijau), `10-24` Penalty 1 (Kuning), `25-49` Penalty 2 (Oranye), `≥50` Penalty 3 (Merah).
+   - Jangan pernah menganggap `totalPoints` sebagai skor prestasi atau men-default nilainya ke 100!
+3. **Koleksi `garages` (`safeboxStock` = TIKET HAPUS PENALTI)**:
+   - Field `safeboxStock` di koleksi `garages` adalah **jumlah tiket hapus penalti**, BUKAN saldo uang/NC.
+   - Kapasitas maksimal tiket: $\text{Max Tickets} = 10 + (\text{safeboxLevel} - 1) \times 5$.
+   - Rasio penggunaan: **1 Tiket Safebox = 1 Poin Penalti Dihapus**.
+4. **Koleksi `currencies` & Aturan Diskon Kumulatif**:
+   - Field saldo utama di database bernama **`totalNC`** (perhatikan huruf besar `NC`).
+   - Endpoint `/api/tracker/me` mengembalikan keduanya (`totalNC` dan `totalNc`) di JSON.
+   - Biaya tebus penalti via NC: Base `pointPrice = 3000 NC` (dari `guildsettings`).
+   - **Diskon Kumulatif**: Server Booster (-500 NC) + Nismara+ Aktif (-500 NC). Jika driver memiliki keduanya, diskon menjadi **-1,000 NC** (biaya tebus menjadi 2,000 NC/poin).
+5. **Koleksi `jobhistories` (Pencatatan Job dari Plugin)**:
+   - **`provider`**: Selalu bernilai `"nismara"` (untuk membedakan dari job legacy `"trucky"`).
+   - **`jobId`**: String angka sekuensial auto-increment mulai dari `"1"`, `"2"`, `"3"`, dst. Dihasilkan oleh fungsi `getNextSequentialJobId()` di `src/routes/jobs.routes.js` yang mencari nilai numerik tertinggi pada dokumen `jobhistories` dengan `provider: "nismara"`.
+   - **`status`**: `"ONGOING"` saat job dimulai (`job_started`), lalu berubah menjadi `"COMPLETED"` (`job_delivered`) atau `"CANCELED"` (`job_cancelled`).
+
+---
+
+## 5. Fitur & Milestone yang Sudah Selesai Dikerjakan (Phases 1–5)
+
+### Phase 1: Core SCS Telemetry SDK & DirectX 11 Overlay
+- Integrasi penuh dengan **SCS Telemetry SDK v1.01** (`scs_telemetry_init` / `scs_telemetry_shutdown`).
+- Hooking `IDXGISwapChain::Present` dan `ResizeBuffers` menggunakan dummy window/swapchain VTable discovery.
+- Penanganan penuh *fullscreen / alt-tab / resolution resize* dengan melepas `ID3D11RenderTargetView` sebelum `ResizeBuffers` dieksekusi.
+- Hooking `WndProc` (`F11` untuk membuka/menutup HP) + bypass penguncian kursor Win32 & DirectInput8 agar mouse dapat mengklik UI dengan bebas tanpa menggerakkan kamera truk.
+
+### Phase 2: Sinkronisasi Akun Driver (`NSM-...`)
+- Konfigurasi lokal disimpan secara otomatis di `<GameFolder>/bin/win_x64/plugins/nismara_config.dat`.
+- Verifikasi token driver (`NSM-XXXXXX-...`) ke `/api/tracker/me` secara asynchronous.
+- Menampilkan nama driver, rank, level, EXP, Nismara+ status, dan saldo **Nismara Cash (NC)** secara real-time.
+
+### Phase 3: Antarmuka iPhone 16 OS & Custom Wallpapers
+- Casing dan layar OLED **iPhone 16** (`392x794` px, layar dalam `350x758` px dengan `46px` rounded corners) dengan 5 pilihan warna frame (*Ultramarine*, *Black Titanium*, *Natural Titanium*, *Teal*, *Pink*).
+- **Lock Screen**: Jam besar iOS 18 (`62px`), tanggal, greeting pill, widget **TRUCK STATUS**, widget **NISMARA WALLET**, widget **SERVER STATUS** (`Connected` + `Playing Singleplayer / TruckersMP / HaulMP / SCS Convoy`), dan kartu notifikasi rute aktif.
+- **Home Screen**: Smart Driver Widget di bagian atas, grid 8 ikon aplikasi (*Telemetry*, *Job*, *Nismara ID*, *Garage*, *Events [SOON]*, *Wallpapers*, *Settings*, *Lock*), serta iOS Frosted Dock di bagian bawah.
+- **Dynamic Island**: Pill interaktif di bagian atas layar yang menampilkan nomor lambung fleet aktif (`NL-074 | 80 km/h`) dan dapat diklik untuk melakukan *expand* informasi detail (kecepatan, gigi, sisa jarak navigasi, atau bahan bakar & RPM).
+- **Default & Custom Wallpaper**:
+  - 5 Preset tema iOS 18 (*Ultramarine*, *Midnight*, *Executive Gold*, *Cyberpunk*, *Sunset*) yang menampilkan logo resmi **`Nismara Group Logo.svg`** tepat di tengah wallpaper.
+  - Mendukung pemilihan gambar kustom dari folder `plugins/wallpapers/` secara terpisah untuk Lock Screen dan Home Screen.
+
+### Phase 4: Sinkronisasi Kendaraan In-Game $\leftrightarrow$ Database `fleets` & `garages`
+- Setiap kali truk di dalam game berganti atau akun selesai disinkronisasi, `TelemetryState::MatchActiveVehicleWithFleet` mencocokkan truk in-game dengan daftar `fleets` milik driver di database:
+  - **Prioritas 1**: Pencocokan eksak `in_game_id` (`brand_id + "." + model_id`, contoh: `renault.magnum.2009` == `renault.magnum.2009`).
+  - **Prioritas 2**: Pencocokan prefix model dasar (`scania.s_2016` cocok dengan `scania.s_2016.8x4`) dengan syarat `fleet.game` sesuai (`ETS2` atau `ATS`).
+  - **Prioritas 3**: Fallback pencocokan nama brand + model secara *case-insensitive*.
+- Aplikasi **My Garage** di dalam HP menampilkan daftar seluruh garasi (`garages`) dan armada truk (`fleets`) milik driver beserta kondisi kesehatan, odometer, bahan bakar, plat nomor, dan badge **`IN USE`** pada armada yang sedang dikendarai.
+
+### Phase 5: Deteksi Server, Pencatatan Job (`jobhistories`), Akumulasi Damage & Anti-Farming Cap
+1. **Deteksi Server (`ServerDetector`)**:
+   - Mendeteksi secara akurat apakah driver bermain di **`Singleplayer`**, **`SCS Convoy`**, **`TruckersMP`**, atau **`HaulMP`**.
+   - Menggunakan deteksi modul DLL di memori (`core_ets2mp.dll` untuk TruckersMP; `haulmp_stub.dll` / `haulmp-telemetry.dll` untuk HaulMP) serta pembacaan terbalik (*reverse scan*) `game.log.txt` sehingga tidak salah mendeteksi jika driver sebelumnya pernah membuka mod lain.
+2. **Siklus Hidup Job Otomatis (`ONGOING` $\rightarrow$ `COMPLETED` / `CANCELED`)**:
+   - Saat mengambil job di game (`SCS_TELEMETRY_GAMEPLAY_EVENT_job_started`): plugin mengirim `POST /api/tracker/jobs/start` dan membuat dokumen `jobhistories` berstatus `"ONGOING"` dengan `jobId` sekuensial (`"1"`, `"2"`, ...).
+   - Saat menyelesaikan job (`SCS_TELEMETRY_GAMEPLAY_EVENT_job_delivered`): plugin mengirim `POST /api/tracker/jobs/complete`, backend menghitung pendapatan **NC**, **EXP**, pajak, biaya bahan bakar, bonus on-time, meng-update kondisi & odometer armada di koleksi `fleets`, mencatat mutasi di `transactions`, dan memperbarui saldo wallet driver.
+   - Saat membatalkan job (`SCS_TELEMETRY_GAMEPLAY_EVENT_job_cancelled`): plugin mengirim `POST /api/tracker/jobs/cancel` dan mengubah status dokumen menjadi `"CANCELED"`.
+3. **Perhitungan Damage Akumulatif (Anti-Repair Reset)**:
+   - Selama job berlangsung (`job_active == true`), setiap kenaikan wear pada 5 komponen truk (`engine`, `transmission`, `cabin`, `chassis`, `wheels`) serta `trailer` dan `cargo` diakumulasikan ke variabel `job_accum_*` (`src/core/scs_callbacks.cpp`).
+   - Jika driver melakukan **repair di bengkel di tengah perjalanan**, nilai wear di game memang turun ke `0`, namun `job_accum_*` **TIDAK di-reset**. Jika setelah repair driver menabrak lagi, kenaikan damage baru langsung ditambahkan ke akumulasi sebelumnya.
+4. **Pembatasan Jarak Maksimum `+10%` (`plannedDistanceKm` Cap)**:
+   - Untuk mencegah eksploitasi *distance farming* (mengambil job jarak pendek lalu berputar-putar agar mendapat NC besar), baik di plugin (`src/core/scs_callbacks.cpp`) maupun di backend (`src/services/jobProcessor.js`), parameter `distanceKm` dibatasi maksimum **`110%` (`+10%`) dari `plannedDistanceKm`**:
+     $$\text{effectiveDistanceKm} = \min\left(\text{drivenKm},\ \text{round}(\text{plannedDistanceKm} \times 1.10)\right)$$
+
+### Phase 6: Aplikasi Penalty Points, Safebox Tickets & Diskon Kumulatif
+1. **Aplikasi Penalty Points (`PhoneAppId::PenaltyPoints`)**:
+   - Ikon Shield Alert Crimson di Home Screen iPhone 16.
+   - Status bar penalti `0 – 50` poin dengan 4 tingkat bahaya (Aman, Penalty 1, Penalty 2, Penalty 3).
+   - Modul tebus via NC dengan stepper poin dan total kalkulasi biaya.
+   - Modul hapus penalti via tiket brankas garasi (`Safebox`).
+   - Notifikasi toast hasil transaksi secara real-time.
+2. **Diskon Kumulatif Penebusan NC**:
+   - Server Booster: Diskon `500 NC`.
+   - Nismara+ Aktif: Diskon `500 NC`.
+   - Keduanya aktif: Diskon kumulatif **`1,000 NC`** (biaya tebus turun dari 3,000 NC menjadi 2,000 NC/poin).
+3. **Endpoint Backend Khusus**:
+   - `POST /api/tracker/points/pay`: Pemotongan atomik saldo NC, pengurangan `points.totalPoints`, pencatatan `pointhistories` & `currencyhistories`.
+   - `POST /api/tracker/points/use-ticket`: Pemotongan stok tiket `garages.safeboxStock`, pengurangan `points.totalPoints`, pencatatan `pointhistories`.
+4. **Perbaikan Tampilan My Garage & Nismara ID**:
+   - `RenderGarageView`: Safebox menampilkan `X / Y Tiket Hapus Penalti` (bukan saldo NC) dengan tombol langsung menuju aplikasi Penalty Points.
+   - `RenderNismaraIdView`: Mengoreksi label dari *Driver Points* menjadi *Poin Penalti* dengan indikator warna status.
+
+### Phase 7: Perombakan Total Antarmuka 7 Aplikasi (Native iOS UI & Interactive Sub-Navigation)
+1. **Penerapan Native Segmented Control (`RenderSegmentedControl`)**:
+   - Seluruh 7 aplikasi kini memiliki arsitektur layout khas iOS mandiri yang unik, tidak lagi monoton.
+2. **My Garage (`RenderAppGarage` & `RenderFleetDetailInspector`)**:
+   - Sub-tab: `Overview`, `Armada (X)`, `Fasilitas`.
+   - Setiap kartu kendaraan di tab `Armada` dapat diklik untuk masuk ke tampilan drill-down **Vehicle Detail Inspector**.
+   - Inspector menampilkan spesifikasi teknis lengkap, status asuransi, live in-game vs database odometer, keausan komponen, tombol bind manual, serta **Jadwal & Target Servis Berkala (Countdown km)** untuk mesin (`maint_engine`), transmisi (`maint_transmission`), rem (`maint_brakes`), dan ban (`maint_tires`). Jika jarak tempuh melewati target, badge merah `LEWAT X km!` akan menyala.
+   - Tombol navigasi atas berganti dinamis menjadi `< Garage` dan judul menjadi `Vehicle Detail`.
+3. **Job (`RenderAppDispatch`)**:
+   - Sub-tab: `Waybill Rute` & `Slip Paycheck`.
+   - `Waybill Rute`: Menampilkan visual rute timeline (Origin $\rightarrow$ Destination) dengan indikator panah, jarak rencana, sisa navigasi real-time, manifest kargo, kuota cap jarak (+10%), serta akumulasi kerusakan dan statistik kecepatan.
+   - `Slip Paycheck`: Menampilkan invoice/paystub digital resmi pekerjaan terakhir lengkap dengan pendapatan bersih NC, bonus multiplayer, hardcore parking, potongan pajak, service, dan denda poin penalti.
+4. **Nismara ID (`RenderAppNismaraId`)**:
+   - Desain **Apple Wallet Holographic Pass** dengan barcode digital prosedural, Discord ID, SteamID64, Trucky Role/Rank emblem dengan warna badge resmi.
+   - Kartu Apple Card saldo Nismara Cash, progress EXP/Level driver, dan pill status pelanggaran.
+5. **Telemetry (`RenderAppTelemetry`)**:
+   - Sub-tab: `Cockpit`, `Powertrain`, `Diagnostik`.
+   - Cockpit menghadirkan digital cluster speedometer besar, kotak transmisi `[D12]`/`[N]`/`[R1]`, cruise control, RPM bar dengan redline warning, serta kompas navigasi dan koordinat GPS dunia.
+6. **Penalty Points (`RenderAppPenaltyPoints`)**:
+   - Sub-tab: `Tebus NC`, `Tiket Garasi`, `Aturan`.
+   - Gauge bahaya terintegrasi dengan stepper interaktif tebus NC (kalkulasi diskon otomatis) dan penggunaan tiket Safebox garasi.
+7. **Wallpapers (`RenderAppWallpapers`)**:
+   - Sub-tab: `Preset iOS 18`, `Foto Disk`, `Warna Casing`.
+8. **Settings (`RenderAppSettings`)**:
+   - Format iOS Inset Grouped Table dengan kelompok pengaturan perilaku, cloud endpoint switcher, token password masking, dan info sistem.
+
+### Phase 8: Nismara Companion Desktop App, Win32 Mutex Gatekeeper & Auto-Updater
+1. **Nismara Companion App (`nismara-companion/`)**:
+   - **Framework**: Tauri v2 (`x86_64-pc-windows-msvc`) + React 19 + TypeScript + Vite + Tailwind CSS v4.
+   - **UI Desktop Modern**:
+     - *Header Quick Launch*: Menampilkan status deteksi Steam, status instalasi plugin `NismaraTracker.dll`, tombol `Install Plugin`, serta tombol `Launch ETS2` / `Launch ATS` (`steam://rungameid/227300` & `270880`).
+     - *5 Tab Navigasi Utama*: **Dashboard**, **Job Waybill**, **My Garage** (lengkap dengan hitungan mundur target servis berkala), **Penalty Points** (tebus via saldo NC & gunakan tiket Safebox), dan **Settings** (pengaturan base URL, switch profile token, info hardware).
+2. **Win32 Named Mutex Gatekeeper Protocol (`Global\NismaraCompanionRunning`)**:
+   - **Tujuan**: Memastikan in-game overlay iPhone 16 **hanya dapat diakses jika dan hanya jika Nismara Companion Desktop App sedang berjalan di background**.
+   - **Implementasi Rust (`src-tauri/src/lib.rs`)**:
+     - Membuka Named Mutex `Global\NismaraCompanionRunning` (dengan fallback `Local\NismaraCompanionRunning`) menggunakan Win32 API (`CreateMutexW`).
+     - Handle mutex disimpan di memori selama Companion App hidup (`CompanionMutexGuard`), dan dilepas secara otomatis saat aplikasi ditutup.
+   - **Implementasi In-Game C++ (Non-Intrusive & Crash-Proof)**:
+     - Plugin `NismaraTracker.dll` tetap ter-load aman bersama game tanpa memicu `FreeLibrary` atau `SCS_RESULT_unsupported` yang berisiko menyebabkan game crash seusai video intro.
+     - Di dalam hook keyboard Windows ([`src/hooks/wndproc_hook.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/hooks/wndproc_hook.cpp)): Setiap kali tombol `F11` ditekan, fungsi `IsCompanionAppRunning()` memeriksa keberadaan Mutex.
+     - **Jika Companion TIDAK berjalan**: Tombol `F11` sepenuhnya dinonaktifkan (*disabled/dormant*), kursor game tidak dibebaskan, dan overlay iPhone 16 tidak pernah terbuka.
+     - **Jika Companion SEDANG berjalan**: Tombol `F11` langsung aktif normal membuka iPhone 16 OS.
+     - **Jika Companion ditutup saat HP sedang terbuka**: Di dalam rendering loop ([`src/ui/tablet_gui.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/ui/tablet_gui.cpp)), sistem mendeteksi hilangnya Mutex dan langsung menutup tampilan HP secara otomatis.
+3. **Ekosistem Auto-Updater (`@tauri-apps/plugin-updater`)**:
+   - Backend `nismara-tracker-server` menyediakan manifest pembaruan versi di `GET /api/tracker/update.json`.
+   - Menggunakan pasangan kunci Minisign untuk validasi integritas binary pembaruan secara kriptografis (`pubkey` terdaftar di `tauri.conf.json`).
+   - Menyediakan kemampuan auto-update untuk aplikasi desktop sekaligus auto-deploy `NismaraTracker.dll` terbaru ke direktori `plugins/` game yang terdeteksi.
+
+---
+
+## 6. Cara Build, Deploy, dan Menjalankan Proyek
+
+### A. Build & Deploy `NismaraTracker.dll`
+Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker`:
+```powershell
+cmake --build build --config Release
+Copy-Item -Path "bin\NismaraTracker.dll" -Destination "C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2\bin\win_x64\plugins\NismaraTracker.dll" -Force
+```
+*(Catatan: Jika game ETS2 sedang berjalan dan me-lock file `NismaraTracker.dll`, tutup game terlebih dahulu sebelum menjalankan `Copy-Item`).*
+
+### B. Menjalankan `nismara-tracker-server`
+Jalankan perintah PowerShell berikut dari direktori `D:\Project\Nismara Transport\Project\nismara-tracker-server`:
+```powershell
+node server.js
+```
+Server akan berjalan di `http://localhost:3100` (endpoint health check: `GET http://localhost:3100/health`).
+
+### C. Menjalankan & Membangun `Nismara Companion`
+Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker\nismara-companion`:
+- **Mode Development (Hot-Reload)**:
+  ```powershell
+  npm run tauri dev
+  ```
+- **Kompilasi Standalone Release Installer (`.exe` / `.msi`)**:
+  ```powershell
+  npm run tauri build
+  ```
+  Binary hasil kompilasi akan berada di folder `src-tauri/target/release/` dan file setup installer di `src-tauri/target/release/bundle/`.
+
+---
+
+## 7. Aturan Penting: DO & DON'T (Guardrails untuk AI Agent)
+
+### DO (Yang Harus Dilakukan)
+- **DO**: Pertahankan kompilasi **single-binary (`NismaraTracker.dll`)** dengan static runtime (`/MT`). Semua aset visual bawaan (seperti logo atau ikon) harus digambar secara prosedural dengan `ImDrawList` atau di-embed sebagai array byte C++ (seperti `include/ui/nismara_logo_data.hpp`).
+- **DO**: Pertahankan protokol **Gatekeeper Mutex `Global\NismaraCompanionRunning`**. Plugin in-game tidak boleh mengaktifkan overlay DX11 atau telemetri jika Companion App tidak sedang berjalan.
+- **DO**: Selalu gunakan komunikasi HTTP asynchronous di thread terpisah (`ApiClient`) untuk seluruh request jaringan dari C++. Jangan pernah melakukan jaringan sinkron di dalam thread DirectX `Present` atau callback SCS SDK.
+- **DO**: Pastikan setiap modifikasi UI di `src/ui/tablet_gui.cpp` tetap berada di dalam batas layar OLED iPhone 16 (`screen_min` hingga `screen_max`) dan sebelum pemanggilan `RenderPhoneBezelOverlay` agar tidak ada elemen visual yang bocor keluar dari bezel HP.
+- **DO**: Gunakan `String(user.discordId)` dan `guildId: "863959415702028318"` saat melakukan query ke koleksi `currencies` dan `points`, serta `ObjectId(user._id)` saat melakukan query ke koleksi `fleets` dan `garages`.
+- **DO**: Pertahankan mekanisme akumulasi damage (`job_accum_*`) dan batas maksimum jarak tempuh `+10%` dari `plannedDistanceKm` baik di sisi client C++ maupun di sisi server Node.js.
+- **DO**: Jika memperbarui aset logo dari file SVG, gunakan skrip rasterisasi supersampling (seperti yang menghasilkan `include/ui/nismara_logo_data.hpp`) agar kurva bezier dan `fill-rule="evenodd"` tetap tajam tanpa artefak.
+
+### DON'T (Yang Dilarang Dilakukan)
+- **DON'T**: **Jangan pernah** mengarahkan polling telemetri atau pengiriman job langsung ke domain Vercel (`beta.nismara.web.id` / website utama) secara terus-menerus. Selalu gunakan `nismara-tracker-server` mandiri agar kuota serverless Vercel aman dari pembengkakan biaya (*overcost*).
+- **DON'T**: **Jangan pernah** mengubah `CMAKE_MSVC_RUNTIME_LIBRARY` menjadi `/MD` (Dynamic DLL), karena akan menyebabkan plugin gagal dimuat pada komputer driver yang belum menginstal VC++ Redistributable terbaru.
+- **DON'T**: **Jangan pernah** menghapus atau melewati pemeriksaan Mutex Gatekeeper di `dllmain.cpp` atau `scs_callbacks.cpp`.
+- **DON'T**: **Jangan pernah** melupakan pelepasan (`Release()`) `ID3D11RenderTargetView` di dalam hook `ResizeBuffers` (`src/hooks/dx11_hook.cpp`). Jika RTV tidak dilepas sebelum `ResizeBuffers` asli dipanggil, game ETS2/ATS akan langsung *crash* saat pengguna melakukan Alt-Tab atau mengubah resolusi layar.
+- **DON'T**: **Jangan pernah** menggunakan karakter non-ASCII / simbol Unicode eksotis yang tidak didukung oleh subset glyph default Dear ImGui (`Segoe UI` ASCII/Latin-1 range) di dalam string UI C++, karena akan tampil sebagai tanda tanya (`?`). Gunakan teks bersih atau ikon vektor `ImDrawList`.
+- **DON'T**: **Jangan pernah** mengandalkan pembacaan baris pertama hingga akhir pada `game.log.txt` untuk mendeteksi server multiplayer tanpa memprioritaskan modul DLL di memori (`haulmp_stub.dll` vs `core_ets2mp.dll`) dan urutan baris log paling bawah (*reverse scan*).
+

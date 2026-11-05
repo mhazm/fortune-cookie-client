@@ -1,0 +1,887 @@
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  LayoutGrid,
+  Newspaper,
+  Map as MapIcon,
+  Settings as SettingsIcon,
+  Headphones,
+  CheckCircle2,
+  AlertCircle,
+  Download,
+  Info,
+  ExternalLink,
+  Radio,
+  X,
+  ShieldCheck,
+  FolderSync,
+  FolderOpen,
+  Save,
+} from "lucide-react";
+
+interface GameInfo {
+  id: string;
+  name: string;
+  steam_app_id: number;
+  is_installed: boolean;
+  game_path: string;
+  exe_path: string;
+  plugin_dir: string;
+  plugin_installed: boolean;
+  plugin_path: string;
+  is_running: boolean;
+}
+
+interface SystemStatus {
+  companion_version: string;
+  steam_installed: boolean;
+  steam_path: string;
+  games: GameInfo[];
+  gatekeeper_active: boolean;
+}
+
+interface NewsItem {
+  id: string;
+  tag: string;
+  tagColor: string;
+  title: string;
+  date: string;
+  summary: string;
+}
+
+const NEWS_LIST: NewsItem[] = [
+  {
+    id: "1",
+    tag: "UPDATE",
+    tagColor: "bg-blue-600 text-blue-100",
+    title: "Nismara Companion v1.0.0 Resmi Dirilis",
+    date: "04 Nov 2026",
+    summary:
+      "Peluncur desktop resmi VTC Nismara Transport kini aktif dengan integrasi Win32 Gatekeeper Mutex, deteksi direktori game fleksibel, dan auto-updater terenkripsi.",
+  },
+  {
+    id: "2",
+    tag: "CONVOY",
+    tagColor: "bg-emerald-600 text-emerald-100",
+    title: "Konvoi Mingguan: Holland Style European Tour",
+    date: "08 Nov 2026",
+    summary:
+      "Rute lintas negara Rotterdam menuju Munich via TruckersMP Simulation 1. Seluruh driver diharapkan menggunakan fleet resmi Nismara Transport.",
+  },
+  {
+    id: "3",
+    tag: "VTC POLICY",
+    tagColor: "bg-amber-600 text-amber-100",
+    title: "Sistem Penebusan Poin Penalti & Tiket Safebox",
+    date: "01 Nov 2026",
+    summary:
+      "Driver kini dapat menebus poin penalti pelanggaran menggunakan saldo NC (dengan diskon kumulatif Booster & Nismara+) atau tiket brankas garasi pribadi.",
+  },
+];
+
+export default function App() {
+  const [activeTab, setActiveTab] = useState<
+    "games" | "news" | "map" | "settings"
+  >("games");
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [loadingAction, setLoadingAction] = useState<string | null>(null);
+  const [statusToast, setStatusToast] = useState<{
+    message: string;
+    isError: boolean;
+  } | null>(null);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+
+  // Settings & Manual Paths
+  const [serverUrl, setServerUrl] = useState(
+    () => localStorage.getItem("nsm_api_url") || "http://localhost:3100",
+  );
+  const [driverToken, setDriverToken] = useState(
+    () =>
+      localStorage.getItem("nsm_driver_token") ||
+      "NSM-D30D6A-290118-8588AF-17139E",
+  );
+
+  const [customEts2Path, setCustomEts2Path] = useState(
+    () =>
+      localStorage.getItem("nsm_ets2_path") ||
+      "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
+  );
+  const [customAtsPath, setCustomAtsPath] = useState(
+    () =>
+      localStorage.getItem("nsm_ats_path") ||
+      "F:\\SteamLibrary\\steamapps\\common\\American Truck Simulator",
+  );
+
+  // Show toast notification
+  const notify = (message: string, isError = false) => {
+    setStatusToast({ message, isError });
+    setTimeout(() => {
+      setStatusToast(null);
+    }, 4500);
+  };
+
+  // Safe fetch system status from Tauri backend with manual path overrides
+  const refreshSystemStatus = async (
+    ets2Override?: string,
+    atsOverride?: string,
+  ) => {
+    const ePath = ets2Override !== undefined ? ets2Override : customEts2Path;
+    const aPath = atsOverride !== undefined ? atsOverride : customAtsPath;
+
+    try {
+      const res = await invoke<SystemStatus>("get_system_status", {
+        customEts2Path: ePath.trim() || null,
+        customAtsPath: aPath.trim() || null,
+      });
+      setSystemStatus(res);
+    } catch (err: any) {
+      console.error("Failed to query system status:", err);
+    }
+  };
+
+  useEffect(() => {
+    refreshSystemStatus();
+    // Periodic poll every 5 seconds
+    const timer = setInterval(() => {
+      refreshSystemStatus();
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [customEts2Path, customAtsPath]);
+
+  const handleLaunchGame = async (gameId: string) => {
+    setLoadingAction(`launch_${gameId}`);
+    try {
+      const msg = await invoke<string>("launch_game", { gameId });
+      notify(msg || `Meluncurkan ${gameId.toUpperCase()} via Steam...`);
+      setTimeout(() => refreshSystemStatus(), 2500);
+    } catch (err: any) {
+      notify(`Gagal meluncurkan game: ${err}`, true);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleInstallPlugin = async (gameId: string) => {
+    setLoadingAction(`install_${gameId}`);
+    const customPath = gameId === "ets2" ? customEts2Path : customAtsPath;
+    try {
+      const msg = await invoke<string>("install_plugin", {
+        gameId,
+        customGamePath: customPath.trim() || null,
+      });
+      notify(msg || `Plugin berhasil dipasang ke folder game!`);
+      refreshSystemStatus();
+    } catch (err: any) {
+      notify(`Gagal memasang plugin: ${err}`, true);
+    } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleSaveDirectories = () => {
+    localStorage.setItem("nsm_ets2_path", customEts2Path.trim());
+    localStorage.setItem("nsm_ats_path", customAtsPath.trim());
+    notify("Direktori game berhasil disimpan & diverifikasi!");
+    refreshSystemStatus(customEts2Path.trim(), customAtsPath.trim());
+  };
+
+  const ets2Game = systemStatus?.games.find((g) => g.id === "ets2");
+  const atsGame = systemStatus?.games.find((g) => g.id === "ats");
+
+  return (
+    <div className="flex h-screen w-screen select-none overflow-hidden bg-[#0a0f18] text-slate-100 font-sans">
+      {/* Toast Notification */}
+      {statusToast && (
+        <div
+          className={`fixed top-4 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-lg shadow-2xl border text-sm backdrop-blur-md transition-all animate-in fade-in duration-200 ${
+            statusToast.isError
+              ? "bg-rose-950/90 border-rose-600/60 text-rose-200 shadow-rose-950/50"
+              : "bg-slate-900/95 border-sky-500/60 text-sky-200 shadow-sky-950/50"
+          }`}
+        >
+          {statusToast.isError ? (
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 text-sky-400 shrink-0" />
+          )}
+          <span className="font-medium">{statusToast.message}</span>
+        </div>
+      )}
+
+      {/* LEFT SIDEBAR NAVIGATION */}
+      <aside className="w-20 shrink-0 bg-[#070b12] border-r border-slate-800/80 flex flex-col items-center py-5 justify-between z-20">
+        <div className="flex flex-col items-center gap-7 w-full">
+          {/* Official Nismara Logo */}
+          <div
+            className="flex flex-col items-center group cursor-pointer"
+            onClick={() => setActiveTab("games")}
+          >
+            <div className="w-12 h-12 rounded-xl bg-slate-900/90 border border-slate-700/80 flex items-center justify-center p-1.5 shadow-lg shadow-sky-500/10 group-hover:scale-105 group-hover:border-sky-500/50 transition-all">
+              <img
+                src="/images/logo_nismara.png"
+                alt="Nismara"
+                className="w-full h-full object-contain filter drop-shadow"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = "none";
+                }}
+              />
+            </div>
+            <span className="text-[10px] font-semibold text-sky-400/90 mt-1 uppercase tracking-widest">
+              Beta
+            </span>
+          </div>
+
+          {/* Navigation Items */}
+          <nav className="flex flex-col items-center gap-3 w-full px-2">
+            {/* Games */}
+            <button
+              onClick={() => setActiveTab("games")}
+              className={`flex flex-col items-center justify-center w-full py-2.5 rounded-xl transition-all ${
+                activeTab === "games"
+                  ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-inner shadow-sky-500/10"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <LayoutGrid className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">Games</span>
+            </button>
+
+            {/* News */}
+            <button
+              onClick={() => setActiveTab("news")}
+              className={`flex flex-col items-center justify-center w-full py-2.5 rounded-xl transition-all ${
+                activeTab === "news"
+                  ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-inner shadow-sky-500/10"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <Newspaper className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">News</span>
+            </button>
+
+            {/* Map */}
+            <button
+              onClick={() => setActiveTab("map")}
+              className={`flex flex-col items-center justify-center w-full py-2.5 rounded-xl transition-all ${
+                activeTab === "map"
+                  ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-inner shadow-sky-500/10"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <MapIcon className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">Map</span>
+            </button>
+
+            {/* Settings */}
+            <button
+              onClick={() => setActiveTab("settings")}
+              className={`flex flex-col items-center justify-center w-full py-2.5 rounded-xl transition-all ${
+                activeTab === "settings"
+                  ? "bg-sky-500/15 text-sky-400 border border-sky-500/30 shadow-inner shadow-sky-500/10"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <SettingsIcon className="w-5 h-5 mb-1" />
+              <span className="text-[11px] font-medium">Settings</span>
+            </button>
+          </nav>
+        </div>
+
+        {/* Support at bottom */}
+        <div className="w-full px-2 flex flex-col items-center gap-3">
+          <a
+            href="https://discord.gg/nismara"
+            target="_blank"
+            rel="noreferrer"
+            className="flex flex-col items-center justify-center w-full py-2 rounded-xl text-slate-400 hover:text-sky-300 hover:bg-slate-800/50 transition-all"
+            title="Nismara Discord & Support"
+          >
+            <Headphones className="w-5 h-5 mb-1" />
+            <span className="text-[10px] font-medium">Support</span>
+          </a>
+        </div>
+      </aside>
+
+      {/* MAIN CONTENT AREA */}
+      <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#080d16]">
+        {/* VIEW: GAMES (LAUNCHER HERO SPLIT) */}
+        {activeTab === "games" && (
+          <div className="flex-1 flex w-full h-[calc(100vh-42px)] relative">
+            {/* LEFT HALF: EURO TRUCK SIMULATOR 2 */}
+            <div className="flex-1 relative flex flex-col justify-between p-8 border-r border-slate-800/60 overflow-hidden group">
+              {/* Background Artwork */}
+              <div
+                className="absolute inset-0 bg-cover bg-no-repeat transition-transform duration-700 group-hover:scale-105"
+                style={{
+                  backgroundImage: `url('/images/ets2_truck_images.webp'), url('/launcher-bg.jpg')`,
+                  backgroundPosition: "center center",
+                }}
+              />
+              {/* Dark Gradient Overlays for contrast */}
+              <div className="absolute inset-0 bg-gradient-to-t from-[#070b13] via-[#070b13]/55 to-[#070b13]/25 pointer-events-none" />
+              <div className="absolute inset-0 bg-gradient-to-r from-[#070b13]/85 via-transparent to-black/35 pointer-events-none" />
+
+              {/* Top Header Badge: Official ETS2 Logo */}
+              <div className="relative z-10 flex items-center justify-between">
+                <div className="flex items-center">
+                  <img
+                    src="/images/ets2-logo.webp"
+                    alt="Euro Truck Simulator 2"
+                    className="h-16 w-auto object-contain filter drop-shadow-2xl"
+                  />
+                </div>
+
+                {ets2Game?.is_running && (
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-semibold backdrop-blur-md">
+                    <Radio className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
+                    <span>In-Game Active</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Content Area */}
+              <div className="relative z-10 flex flex-col gap-4 max-w-md">
+                {/* Status Indicator */}
+                <div className="flex items-center gap-2 text-sm">
+                  {!systemStatus ? (
+                    <div className="flex items-center gap-2 text-slate-400 font-medium animate-pulse">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                      <span>Memeriksa direktori ETS2...</span>
+                    </div>
+                  ) : ets2Game?.is_running ? (
+                    <div className="flex items-center gap-2 text-emerald-400 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/50" />
+                      <span>Sedang Bermain Euro Truck Simulator 2</span>
+                    </div>
+                  ) : ets2Game?.is_installed ? (
+                    <div className="flex items-center gap-2 text-slate-300 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                      <span>
+                        {ets2Game.plugin_installed
+                          ? "Siap Bermain"
+                          : "Plugin NismaraTracker belum terpasang"}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-amber-400 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
+                      <span>
+                        Folder ETS2 belum ditentukan atau disk terhambat
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-3 pt-1">
+                  {!systemStatus ? (
+                    <button
+                      disabled
+                      className="px-8 py-3.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 font-semibold text-sm cursor-wait animate-pulse"
+                    >
+                      Memeriksa...
+                    </button>
+                  ) : ets2Game?.is_running ? (
+                    <button
+                      disabled
+                      className="px-7 py-3.5 rounded-xl bg-emerald-600/30 border border-emerald-500/50 text-emerald-300 font-bold text-sm flex items-center gap-2 cursor-default"
+                    >
+                      <Radio className="w-4 h-4 animate-pulse" />
+                      <span>ETS2 Sedang Berjalan</span>
+                    </button>
+                  ) : !ets2Game?.is_installed ? (
+                    <button
+                      onClick={() => setActiveTab("settings")}
+                      className="px-7 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 font-semibold text-sm flex items-center gap-2 transition-all hover:scale-102"
+                    >
+                      <FolderOpen className="w-4 h-4 text-sky-400" />
+                      <span>Atur Folder di Settings ⚙️</span>
+                    </button>
+                  ) : !ets2Game.plugin_installed ? (
+                    <button
+                      onClick={() => handleInstallPlugin("ets2")}
+                      disabled={loadingAction === "install_ets2"}
+                      className="px-7 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm shadow-xl shadow-amber-500/25 flex items-center gap-2 transition-all hover:scale-102 active:scale-98"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>
+                        {loadingAction === "install_ets2"
+                          ? "Memasang..."
+                          : "Pasang Plugin In-Game"}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleLaunchGame("ets2")}
+                      disabled={loadingAction === "launch_ets2"}
+                      className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white font-bold text-sm shadow-xl shadow-sky-500/30 flex items-center gap-2 transition-all hover:scale-102 active:scale-98"
+                    >
+                      <span>
+                        {loadingAction === "launch_ets2"
+                          ? "Membuka..."
+                          : "Open ETS2"}
+                      </span>
+                      <span className="text-lg">➜</span>
+                    </button>
+                  )}
+
+                  {ets2Game?.is_installed && ets2Game.plugin_installed && (
+                    <button
+                      onClick={() => handleInstallPlugin("ets2")}
+                      title="Perbarui / Verifikasi file NismaraTracker.dll di folder game"
+                      className="p-3.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all backdrop-blur-md"
+                    >
+                      <FolderSync className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT HALF: AMERICAN TRUCK SIMULATOR */}
+            <div className="flex-1 relative flex flex-col justify-between p-8 overflow-hidden group">
+              {/* Background Artwork */}
+              <div
+                className="absolute inset-0 bg-cover bg-no-repeat transition-transform duration-700 group-hover:scale-105"
+                style={{
+                  backgroundImage: `url('/images/ats_truck_images.webp'), url('/launcher-bg.jpg')`,
+                  backgroundPosition: "center center",
+                }}
+              />
+              {/* Dark Gradient Overlays */}
+              <div className="absolute inset-0 bg-gradient-to-t from-[#070b13] via-[#070b13]/55 to-[#070b13]/25 pointer-events-none" />
+              <div className="absolute inset-0 bg-gradient-to-l from-[#070b13]/85 via-transparent to-black/35 pointer-events-none" />
+
+              {/* Top Header Badge: Official ATS Logo */}
+              <div className="relative z-10 flex items-center justify-between">
+                <div className="flex items-center">
+                  <img
+                    src="/images/ats-logo.webp"
+                    alt="American Truck Simulator"
+                    className="h-16 w-auto object-contain filter drop-shadow-2xl"
+                  />
+                </div>
+
+                {atsGame?.is_running && (
+                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-semibold backdrop-blur-md">
+                    <Radio className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
+                    <span>In-Game Active</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Content Area */}
+              <div className="relative z-10 flex flex-col gap-4 max-w-md">
+                {/* Status Indicator */}
+                <div className="flex items-center gap-2 text-sm">
+                  {!systemStatus ? (
+                    <div className="flex items-center gap-2 text-slate-400 font-medium animate-pulse">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                      <span>Memeriksa direktori ATS...</span>
+                    </div>
+                  ) : atsGame?.is_running ? (
+                    <div className="flex items-center gap-2 text-emerald-400 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shadow-lg shadow-emerald-400/50" />
+                      <span>Sedang Bermain American Truck Simulator</span>
+                    </div>
+                  ) : atsGame?.is_installed ? (
+                    <div className="flex items-center gap-2 text-slate-300 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                      <span>
+                        {atsGame.plugin_installed
+                          ? "Ready to Play"
+                          : "Plugin NismaraTracker belum terpasang"}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-slate-400 font-medium">
+                      <span className="w-2.5 h-2.5 rounded-full bg-slate-500" />
+                      <span>
+                        Game belum terinstal atau tentukan folder di Settings
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-3 pt-1">
+                  {!systemStatus ? (
+                    <button
+                      disabled
+                      className="px-8 py-3.5 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 font-semibold text-sm cursor-wait animate-pulse"
+                    >
+                      Memeriksa...
+                    </button>
+                  ) : atsGame?.is_running ? (
+                    <button
+                      disabled
+                      className="px-7 py-3.5 rounded-xl bg-emerald-600/30 border border-emerald-500/50 text-emerald-300 font-bold text-sm flex items-center gap-2 cursor-default"
+                    >
+                      <Radio className="w-4 h-4 animate-pulse" />
+                      <span>ATS Sedang Berjalan</span>
+                    </button>
+                  ) : atsGame?.is_installed ? (
+                    !atsGame.plugin_installed ? (
+                      <button
+                        onClick={() => handleInstallPlugin("ats")}
+                        disabled={loadingAction === "install_ats"}
+                        className="px-7 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 text-slate-950 font-bold text-sm flex items-center gap-2 transition-all hover:scale-102"
+                      >
+                        <Download className="w-4 h-4" />
+                        <span>Pasang Plugin</span>
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleLaunchGame("ats")}
+                        disabled={loadingAction === "launch_ats"}
+                        className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 text-white font-bold text-sm shadow-xl shadow-red-500/25 flex items-center gap-2 transition-all hover:scale-102"
+                      >
+                        <span>Open ATS</span>
+                        <span className="text-lg">➜</span>
+                      </button>
+                    )
+                  ) : (
+                    <button
+                      onClick={() => setActiveTab("settings")}
+                      className="px-7 py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 font-medium text-sm flex items-center gap-2 backdrop-blur-md transition-all hover:scale-102"
+                    >
+                      <FolderOpen className="w-4 h-4 text-sky-400" />
+                      <span>Atur Folder di Settings ⚙️</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: NEWS */}
+        {activeTab === "news" && (
+          <div className="flex-1 p-8 overflow-y-auto max-w-5xl mx-auto w-full">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <Newspaper className="w-6 h-6 text-sky-400" />
+                <span>Nismara News & Announcements</span>
+              </h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Kabar terbaru, jadwal konvoi, dan log pembaruan VTC.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {NEWS_LIST.map((item) => (
+                <div
+                  key={item.id}
+                  className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 hover:border-slate-700 transition-all flex flex-col gap-2.5 backdrop-blur-sm"
+                >
+                  <div className="flex items-center justify-between">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider ${item.tagColor}`}
+                    >
+                      {item.tag}
+                    </span>
+                    <span className="text-xs text-slate-400">{item.date}</span>
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-100">
+                    {item.title}
+                  </h3>
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    {item.summary}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* VIEW: MAP */}
+        {activeTab === "map" && (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 mb-4">
+              <MapIcon className="w-8 h-8" />
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2">
+              Live Convoy Map
+            </h2>
+            <p className="text-sm text-slate-400 max-w-md">
+              Peta posisi real-time armada truk Nismara Transport di server
+              TruckersMP dan SCS Convoy akan segera hadir di pembaruan
+              berikutnya.
+            </p>
+          </div>
+        )}
+
+        {/* VIEW: SETTINGS */}
+        {activeTab === "settings" && (
+          <div className="flex-1 p-8 overflow-y-auto max-w-4xl mx-auto w-full">
+            <div className="mb-6">
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <SettingsIcon className="w-6 h-6 text-sky-400" />
+                <span>Pengaturan Nismara Companion</span>
+              </h2>
+              <p className="text-sm text-slate-400 mt-1">
+                Konfigurasi folder instalasi game manual, endpoint tracker, dan
+                token driver.
+              </p>
+            </div>
+
+            <div className="space-y-5">
+              {/* Gatekeeper Card */}
+              <div className="p-5 rounded-2xl bg-slate-900/80 border border-emerald-500/30 flex items-center justify-between">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-100">
+                      Win32 Mutex Gatekeeper Protocol
+                    </h4>
+                    <p className="text-xs text-emerald-400/90 font-mono mt-0.5">
+                      Global\NismaraCompanionRunning (Active & Holding Handle)
+                    </p>
+                  </div>
+                </div>
+                <span className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">
+                  PROTECTED
+                </span>
+              </div>
+
+              {/* MANUAL GAME DIRECTORIES (SOLVES DISK HANG ISSUES) */}
+              <div className="p-6 rounded-2xl bg-slate-900/80 border border-sky-500/40 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <FolderOpen className="w-5 h-5 text-sky-400" />
+                    <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
+                      Direktori Game Manual (Anti Disk Hang)
+                    </h3>
+                  </div>
+                  <button
+                    onClick={handleSaveDirectories}
+                    className="px-4 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-sky-500/20 transition-all cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Simpan & Terapkan</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Tentukan lokasi folder game secara langsung di bawah ini.
+                  Pengaturan manual ini mengabaikan scanning disk lain yang
+                  mungkin sedang error/lambat sehingga game langsung terdeteksi
+                  instan.
+                </p>
+
+                {/* ETS2 Manual Path */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium text-slate-300">
+                      Folder Euro Truck Simulator 2
+                    </label>
+                    <span
+                      className={`text-[11px] font-semibold ${ets2Game?.is_installed ? "text-emerald-400" : "text-amber-400"}`}
+                    >
+                      {ets2Game?.is_installed
+                        ? "✓ Terdeteksi Valid"
+                        : "Belum Ditemukan"}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={customEts2Path}
+                    onChange={(e) => setCustomEts2Path(e.target.value)}
+                    placeholder="C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[11px] text-slate-500">
+                      Lokasi folder utama tempat eurotrucks2.exe atau subfolder
+                      bin/win_x64 berada.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCustomEts2Path(
+                          "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
+                        )
+                      }
+                      className="text-[11px] text-sky-400 hover:underline cursor-pointer"
+                    >
+                      Reset ke Default Steam C:
+                    </button>
+                  </div>
+                </div>
+
+                {/* ATS Manual Path */}
+                <div className="pt-2 border-t border-slate-800">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-medium text-slate-300">
+                      Folder American Truck Simulator
+                    </label>
+                    <span
+                      className={`text-[11px] font-semibold ${atsGame?.is_installed ? "text-emerald-400" : "text-amber-400"}`}
+                    >
+                      {atsGame?.is_installed
+                        ? "✓ Terdeteksi Valid"
+                        : "Belum Ditemukan"}
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    value={customAtsPath}
+                    onChange={(e) => setCustomAtsPath(e.target.value)}
+                    placeholder="F:\SteamLibrary\steamapps\common\American Truck Simulator"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-[11px] text-slate-500">
+                      Lokasi folder utama tempat amtrucks.exe atau subfolder
+                      bin/win_x64 berada.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCustomAtsPath(
+                          "F:\\SteamLibrary\\steamapps\\common\\American Truck Simulator",
+                        )
+                      }
+                      className="text-[11px] text-sky-400 hover:underline cursor-pointer"
+                    >
+                      Reset ke Default Drive F:
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Endpoint & Token Card */}
+              <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
+                <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
+                  Koneksi Server & Akun
+                </h3>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Server Backend URL
+                  </label>
+                  <input
+                    type="text"
+                    value={serverUrl}
+                    onChange={(e) => {
+                      setServerUrl(e.target.value);
+                      localStorage.setItem("nsm_api_url", e.target.value);
+                    }}
+                    placeholder="http://localhost:3100"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                  <span className="text-[11px] text-slate-500 mt-1 block">
+                    Gunakan http://localhost:3100 untuk development lokal, atau
+                    https://beta.nismara.web.id untuk live production.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Driver Tracker Token
+                  </label>
+                  <input
+                    type="text"
+                    value={driverToken}
+                    onChange={(e) => {
+                      setDriverToken(e.target.value);
+                      localStorage.setItem("nsm_driver_token", e.target.value);
+                    }}
+                    placeholder="NSM-XXXXXX-XXXXXX-..."
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-sky-500 font-mono"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* BOTTOM TICKER / FOOTER BAR */}
+        <footer className="h-10 shrink-0 bg-[#070b12] border-t border-slate-800/80 flex items-center justify-between px-5 text-xs text-slate-400 z-20">
+          {/* Left Ticker */}
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="font-semibold text-slate-300">What's new</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-black bg-blue-600 text-white">
+                NEW
+              </span>
+            </div>
+            <span className="truncate text-slate-300/90 text-[11px]">
+              Nismara Companion v1.0.0 resmi diluncurkan dengan native
+              Gatekeeper Mutex guard dan peluncur game instan.
+            </span>
+          </div>
+
+          {/* Right Info Link */}
+          <button
+            onClick={() => setShowAboutModal(true)}
+            className="flex items-center gap-1 hover:text-slate-200 transition-colors shrink-0 ml-4 cursor-pointer"
+          >
+            <span>About Nismara Companion</span>
+            <Info className="w-3.5 h-3.5" />
+          </button>
+        </footer>
+      </div>
+
+      {/* ABOUT MODAL */}
+      {showAboutModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="w-[440px] p-6 rounded-2xl bg-slate-900 border border-slate-700/80 shadow-2xl text-slate-200 relative flex flex-col gap-4">
+            <button
+              onClick={() => setShowAboutModal(false)}
+              className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-center p-1.5 shadow-lg shadow-sky-500/25">
+                <img
+                  src="/images/logo_nismara.png"
+                  alt="Nismara"
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Nismara Companion
+                </h3>
+                <span className="text-xs text-sky-400 font-medium">
+                  Version 1.0.0 (Official Release)
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Nismara Companion adalah aplikasi pendamping desktop resmi untuk
+              komunitas pengemudi VTC <strong>Nismara Transport</strong>.
+              Aplikasi ini bertindak sebagai penjaga gerbang (Gatekeeper Mutex)
+              untuk in-game telemetry plugin (`NismaraTracker.dll`) serta media
+              komunikasi telemetri real-time.
+            </p>
+
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] space-y-1 font-mono text-slate-400">
+              <div>Framework: Tauri v2 + React 19 + Tailwind v4</div>
+              <div>Runtime: Rust Native x64 / MSVC static</div>
+              <div>Gatekeeper: Global\NismaraCompanionRunning</div>
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+              <span>© 2026 Nismara Transport</span>
+              <a
+                href="https://beta.nismara.web.id"
+                target="_blank"
+                rel="noreferrer"
+                className="text-sky-400 hover:underline flex items-center gap-1"
+              >
+                <span>Website Resmi</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
