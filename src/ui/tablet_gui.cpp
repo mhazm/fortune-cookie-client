@@ -3496,7 +3496,7 @@ void TabletGui::RenderAppSettings(
         ImGui::PopFont();
         ImGui::Separator();
         ImGui::Spacing();
-        ImGui::TextDisabled("Versi Plugin: v1.2.0 (x64 Release)");
+        ImGui::TextDisabled("Versi Plugin: v1.0.1 (x64 Release)");
         ImGui::TextDisabled("Engine: SCS Telemetry SDK v1.01");
         ImGui::TextDisabled("Graphics: DirectX 11 Hook (MinHook)");
     }

@@ -1,6 +1,6 @@
 [package]
 name = "nismara-companion"
-version = "0.1.0"
+version = "1.0.1"
 description = "Nismara Companion Desktop App for ETS2 & ATS"
 authors = ["Nismara Transport"]
 edition = "2024"

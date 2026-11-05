@@ -208,6 +208,8 @@ interface EventsApiResponse {
   };
 }
 
+const APP_VERSION = "1.0.1";
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<
     "games" | "news" | "events" | "settings"
@@ -306,7 +308,7 @@ export default function App() {
       } else {
         setAvailableUpdate(null);
         if (manual) {
-          notify("Nismara Companion sudah dalam versi terbaru (v1.0.0).");
+          notify(`Nismara Companion sudah dalam versi terbaru (v${APP_VERSION}).`);
         }
       }
     } catch (err: any) {
@@ -320,7 +322,7 @@ export default function App() {
         // When latest.json is 404 (initial release or no newer release published), app is already latest
         setAvailableUpdate(null);
         if (manual) {
-          notify("Nismara Companion sudah dalam versi terbaru (v1.0.0).");
+          notify(`Nismara Companion sudah dalam versi terbaru (v${APP_VERSION}).`);
         }
       } else if (manual) {
         notify(`Pemeriksaan pembaruan: ${errMsg}`, true);
@@ -341,7 +343,7 @@ export default function App() {
           const parseVer = (v: string) =>
             v.split(".").map((n) => parseInt(n, 10) || 0);
           const [sMaj, sMin, sPat] = parseVer(data.minVersion);
-          const [cMaj, cMin, cPat] = parseVer("1.0.0");
+          const [cMaj, cMin, cPat] = parseVer(APP_VERSION);
           const isOutdated =
             cMaj < sMaj ||
             (cMaj === sMaj && cMin < sMin) ||
@@ -1944,7 +1946,7 @@ export default function App() {
                   </span>
                 </h3>
                 <div className="flex items-center gap-2 text-xs mt-0.5">
-                  <span className="text-slate-400">Versi Saat Ini: v1.0.0</span>
+                  <span className="text-slate-400">Versi Saat Ini: v{APP_VERSION}</span>
                   <span className="text-slate-500">➜</span>
                   <span className="text-sky-300 font-bold">
                     Versi Baru: v{availableUpdate.version}
@@ -2050,7 +2052,7 @@ export default function App() {
                   Nismara Companion
                 </h3>
                 <span className="text-xs text-sky-400 font-medium">
-                  Version 1.0.0 (Official Release)
+                  Version {APP_VERSION} (Official Release)
                 </span>
               </div>
             </div>
