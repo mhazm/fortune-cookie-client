@@ -29,7 +29,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2QzhEOUU2RDlEM0RDODQKUldTRTNOUFo1dG5JaG5zNG5LUWNjcjloYmNQVnJXSEJLSi8rZklDYkNLN1FPekVvdjJCdW95SlkK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM1MkE3NEQzQUNBODI1NkMKUldSc0phaXMwM1FxeFNyaEZRaFJrZFF2UFN0cjJGWnAzS3dBSHJ0MVBORmxZOGk3NkhLK0paWU8K",
       "endpoints": [
         "https://github.com/mhazm/fortune-cookie-client/releases/latest/download/latest.json"
       ]

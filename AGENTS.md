@@ -295,11 +295,17 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    7. `g_trailer_advanced_coupling = 1` (Advanced Trailer Coupling = Yes).
    8. `g_fuel_economy = 1` (Realistic Fuel Consumption = Yes).
    9. `g_air_brake = 1` (Air Brakes Simulation = Yes).
-3. **Kriteria Validasi Kelayakan Hardcore (Semua Wajib Terpenuhi)**:
+3. **Kategori Kecepatan Mengemudi (Speed Classification)**:
+   - **Real Miles** ($\le 100\text{ km/h}$): Kecepatan simulasi realistis standar VTC Nismara Transport. Memenuhi syarat Hardcore Points dan tanpa penalti kecepatan.
+   - **Race Miles** ($> 100\text{ km/h}$ dan $\le 180\text{ km/h}$): Melebihi batas kecepatan simulasi. Dikenakan penalti `+2` Poin Pelanggaran (`pointhistories`), pembatalan bonus Distance & Mass (`-100%`), dan diskualifikasi rating Hardcore.
+   - **Invalid Stats** ($> 180\text{ km/h}$): Kecepatan tidak wajar / manipulasi physics / warping. Dikenakan penalti berat `+5` Poin Pelanggaran, pembatalan reward Hardcore total, dan rating otomatis 0 bintang.
+
+4. **Kriteria Validasi Kelayakan Hardcore (Semua Wajib Terpenuhi)**:
+   - Kecepatan berada dalam kategori **Real Miles** ($\le 100\text{ km/h}$).
    - Seluruh 9 setting konfigurasi profil di atas terkonfigurasi dengan benar.
    - Tidak menggunakan Auto Load (*No Auto Load* — dikecualikan untuk Freight Market, Public Transport System, dan WOTR Freight Market).
    - Parkir Manual (*Manual Parking* — event `auto_parking_used == false`).
-   - Jarak tempuh di atas 250 km (`distanceKm >= 250`).
+   - Jarak tempuh aktual di atas 250 km (`distanceKm >= 250`).
    - Tidak ada manipulasi waktu / warp (*No Warping* — rasio waktu in-game vs wall-clock valid, warp value tidak berubah).
    - Tidak menggunakan Damage Mod (kerusakan fisik aktif & logis).
    - Massa kargo lebih dari 0 ton (`cargoMassTons > 0`).
@@ -307,16 +313,16 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - Tidak ada Forbidden Mods yang terdeteksi di `game.log.txt`.
    - Tidak melakukan rute berulang secara eksploitatif (*No Repetitive Route*).
    - Massa kargo masuk akal (*Reasonable Cargo Mass*).
-4. **Rumus Perhitungan Hardcore Points (HP)**:
+5. **Rumus Perhitungan Hardcore Points (HP)**:
    $$\text{HP} = 0.4 \times \text{Distance} + 0.35 \times \text{Mass} - 0.4 \times \text{Fuel Economy} - 1.0 \times \text{Damage Percentage} - 5.0 \times \text{Number of Fines}$$
    - *Non SCS Stock Cargo*: Nilai bonus massa kargo tetap bernilai `5.25`.
-5. **Penalti Pengurangan HP**:
+6. **Penalti Pengurangan HP**:
    - *Late Delivery*: Penalti `-50%` dari total bonus Distance dan Mass.
    - *Rest Time Stop Overdue*: Melewati batas istirahat > 30 menit waktu game $\rightarrow$ Penalti `-50%` dari total bonus Distance dan Mass.
-   - *Race / Invalid Stats*: Pengurangan total bonus Distance dan Mass.
-   - *Job Canceled*: Pengurangan total bonus Distance dan Mass.
+   - *Race / Invalid Stats*: Pengurangan total bonus Distance dan Mass (`-100%`).
+   - *Job Canceled*: Pengurangan total bonus Distance dan Mass (`-100%`).
    - *Speeding (Batas > 40 km/h, toleransi 5 km/h)*: Maksimal waktu mengebut yang diizinkan adalah `10%` dari Real-Time driving. Setiap 1 menit mengebut di atas batas tersebut dikenakan penalti `-5%` dari bonus Distance dan Mass.
-6. **Delivery Rating Bintang (0 hingga 5 Bintang)**:
+7. **Delivery Rating Bintang (0 hingga 5 Bintang)**:
    - **Distance Rating**: `<250km`: 0★, `250-499km`: 1★, `500-749km`: 2★, `750-999km`: 3★, `1000-1249km`: 4★, `≥1250km`: 5★.
    - **Mass Rating**: `<10t`: 0★, `10-14.99t`: 1★, `15-19.99t`: 2★, `20-24.99t`: 3★, `25-29.99t`: 4★, `≥30t`: 5★ (Non SCS Stock Cargo = 1★).
    - **Damage Rating**: `0%`: 5★, `1-10%`: 4★, `11-20%`: 3★, `21-30%`: 2★, `31-40%`: 1★, `>40%`: 0★.
@@ -326,8 +332,8 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - **Penalti Bintang Akhir**:
      - Late Delivery: `-2 Bintang`.
      - Rest Time Overdue: `-2 Bintang`.
-     - Job Canceled / Race Stats: `0 Bintang (Diskualifikasi Total)`.
-7. **Deteksi Forbidden Mods**:
+     - Job Canceled / Race Stats / Invalid Stats: `0 Bintang (Diskualifikasi Total)`.
+8. **Deteksi Forbidden Mods**:
    - Memeriksa daftar mod aktif di `game.log.txt` yang mengubah: damage calculation, fuel consumption, tollgates, tank size, speed limits, delivery time, sleeping time, bypass fines, atau economy mod.
 
 ---

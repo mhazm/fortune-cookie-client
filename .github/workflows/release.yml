@@ -127,8 +127,8 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
-      # Upload standalone NismaraTracker.dll & latest.json directly as GitHub Release Assets
-      - name: Upload standalone NismaraTracker.dll & latest.json to Release
+      # Upload standalone NismaraTracker.dll directly as GitHub Release Asset
+      - name: Upload standalone NismaraTracker.dll to Release
         if: matrix.platform == 'windows-latest'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -141,9 +141,5 @@ jobs:
           } elseif (Test-Path "bin/NismaraTracker.dll") {
             gh release upload "$tag" "bin/NismaraTracker.dll" --clobber
             Write-Host "Uploaded standalone NismaraTracker.dll to release $tag"
-          }
-          if (Test-Path "latest.json") {
-            gh release upload "$tag" "latest.json" --clobber
-            Write-Host "Uploaded latest.json to release $tag"
           }
 
