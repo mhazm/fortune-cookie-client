@@ -29,15 +29,25 @@ interface GameInfo {
   plugin_dir: string;
   plugin_installed: boolean;
   plugin_path: string;
+  user_data_dir: string;
+  config_path: string;
   is_running: boolean;
 }
 
 interface SystemStatus {
   companion_version: string;
+  os_platform: string;
   steam_installed: boolean;
   steam_path: string;
   games: GameInfo[];
   gatekeeper_active: boolean;
+}
+
+interface PluginConfigPayload {
+  driver_token: string;
+  api_base_url: string;
+  ets2_config_path: string;
+  ats_config_path: string;
 }
 
 interface NewsItem {
@@ -91,25 +101,20 @@ export default function App() {
   } | null>(null);
   const [showAboutModal, setShowAboutModal] = useState(false);
 
-  // Settings & Manual Paths
+  // Settings & Dynamic Paths (No hardcoded developer tokens or drive paths!)
   const [serverUrl, setServerUrl] = useState(
     () => localStorage.getItem("nsm_api_url") || "http://localhost:3100",
   );
   const [driverToken, setDriverToken] = useState(
-    () =>
-      localStorage.getItem("nsm_driver_token") ||
-      "NSM-D30D6A-290118-8588AF-17139E",
+    () => localStorage.getItem("nsm_driver_token") || "",
   );
+  const [resolvedConfigPath, setResolvedConfigPath] = useState<string>("");
 
   const [customEts2Path, setCustomEts2Path] = useState(
-    () =>
-      localStorage.getItem("nsm_ets2_path") ||
-      "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
+    () => localStorage.getItem("nsm_ets2_path") || "",
   );
   const [customAtsPath, setCustomAtsPath] = useState(
-    () =>
-      localStorage.getItem("nsm_ats_path") ||
-      "F:\\SteamLibrary\\steamapps\\common\\American Truck Simulator",
+    () => localStorage.getItem("nsm_ats_path") || "",
   );
 
   // Show toast notification
@@ -138,6 +143,27 @@ export default function App() {
       console.error("Failed to query system status:", err);
     }
   };
+
+  // Load saved config from Documents\<Game>\nismara_config.dat on initial startup
+  useEffect(() => {
+    invoke<PluginConfigPayload>("get_plugin_config")
+      .then((cfg) => {
+        if (cfg.ets2_config_path) {
+          setResolvedConfigPath(cfg.ets2_config_path);
+        }
+        if (cfg.driver_token) {
+          setDriverToken(cfg.driver_token);
+          localStorage.setItem("nsm_driver_token", cfg.driver_token);
+        }
+        if (cfg.api_base_url) {
+          setServerUrl(cfg.api_base_url);
+          localStorage.setItem("nsm_api_url", cfg.api_base_url);
+        }
+      })
+      .catch((err) => {
+        console.warn("Could not load initial plugin config:", err);
+      });
+  }, []);
 
   useEffect(() => {
     refreshSystemStatus();
@@ -169,6 +195,11 @@ export default function App() {
         gameId,
         customGamePath: customPath.trim() || null,
       });
+      // Also sync current serverUrl & driverToken to Documents\<Game>\nismara_config.dat
+      await invoke<PluginConfigPayload>("save_plugin_config", {
+        driverToken: driverToken.trim(),
+        apiBaseUrl: serverUrl.trim(),
+      }).catch(() => {});
       notify(msg || `Plugin berhasil dipasang ke folder game!`);
       refreshSystemStatus();
     } catch (err: any) {
@@ -181,8 +212,29 @@ export default function App() {
   const handleSaveDirectories = () => {
     localStorage.setItem("nsm_ets2_path", customEts2Path.trim());
     localStorage.setItem("nsm_ats_path", customAtsPath.trim());
-    notify("Direktori game berhasil disimpan & diverifikasi!");
+    notify("Pengaturan direktori game berhasil disimpan & diverifikasi!");
     refreshSystemStatus(customEts2Path.trim(), customAtsPath.trim());
+  };
+
+  const handleSavePluginConfig = async () => {
+    const cleanUrl = serverUrl.trim() || "http://localhost:3100";
+    const cleanToken = driverToken.trim();
+    localStorage.setItem("nsm_api_url", cleanUrl);
+    localStorage.setItem("nsm_driver_token", cleanToken);
+    try {
+      const saved = await invoke<PluginConfigPayload>("save_plugin_config", {
+        driverToken: cleanToken,
+        apiBaseUrl: cleanUrl,
+      });
+      setServerUrl(saved.api_base_url);
+      setDriverToken(saved.driver_token);
+      setResolvedConfigPath(saved.ets2_config_path);
+      notify(
+        "Token & URL Server berhasil disinkronkan ke Documents\\<Game>\\nismara_config.dat!",
+      );
+    } catch (err: any) {
+      notify(`Gagal menyimpan konfigurasi plugin: ${err}`, true);
+    }
   };
 
   const ets2Game = systemStatus?.games.find((g) => g.id === "ets2");
@@ -680,7 +732,7 @@ export default function App() {
                       className={`text-[11px] font-semibold ${ets2Game?.is_installed ? "text-emerald-400" : "text-amber-400"}`}
                     >
                       {ets2Game?.is_installed
-                        ? "✓ Terdeteksi Valid"
+                        ? `✓ Terdeteksi (${ets2Game.game_path})`
                         : "Belum Ditemukan"}
                     </span>
                   </div>
@@ -688,24 +740,26 @@ export default function App() {
                     type="text"
                     value={customEts2Path}
                     onChange={(e) => setCustomEts2Path(e.target.value)}
-                    placeholder="C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2"
+                    placeholder={
+                      ets2Game?.game_path ||
+                      "Kosongkan untuk deteksi otomatis via Steam libraryfolders.vdf"
+                    }
                     className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500 font-mono"
                   />
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-[11px] text-slate-500">
-                      Lokasi folder utama tempat eurotrucks2.exe atau subfolder
-                      bin/win_x64 berada.
+                      Kosongkan agar otomatis mengikuti library Steam Anda, atau isi manual jika kustom.
                     </span>
                     <button
                       type="button"
-                      onClick={() =>
-                        setCustomEts2Path(
-                          "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Euro Truck Simulator 2",
-                        )
-                      }
+                      onClick={() => {
+                        setCustomEts2Path("");
+                        localStorage.removeItem("nsm_ets2_path");
+                        refreshSystemStatus("", customAtsPath);
+                      }}
                       className="text-[11px] text-sky-400 hover:underline cursor-pointer"
                     >
-                      Reset ke Default Steam C:
+                      Gunakan Deteksi Otomatis Steam
                     </button>
                   </div>
                 </div>
@@ -720,7 +774,7 @@ export default function App() {
                       className={`text-[11px] font-semibold ${atsGame?.is_installed ? "text-emerald-400" : "text-amber-400"}`}
                     >
                       {atsGame?.is_installed
-                        ? "✓ Terdeteksi Valid"
+                        ? `✓ Terdeteksi (${atsGame.game_path})`
                         : "Belum Ditemukan"}
                     </span>
                   </div>
@@ -728,24 +782,26 @@ export default function App() {
                     type="text"
                     value={customAtsPath}
                     onChange={(e) => setCustomAtsPath(e.target.value)}
-                    placeholder="F:\SteamLibrary\steamapps\common\American Truck Simulator"
+                    placeholder={
+                      atsGame?.game_path ||
+                      "Kosongkan untuk deteksi otomatis via Steam libraryfolders.vdf"
+                    }
                     className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-xs focus:outline-none focus:border-sky-500 font-mono"
                   />
                   <div className="flex items-center justify-between mt-1">
                     <span className="text-[11px] text-slate-500">
-                      Lokasi folder utama tempat amtrucks.exe atau subfolder
-                      bin/win_x64 berada.
+                      Kosongkan agar otomatis mengikuti library Steam Anda, atau isi manual jika kustom.
                     </span>
                     <button
                       type="button"
-                      onClick={() =>
-                        setCustomAtsPath(
-                          "F:\\SteamLibrary\\steamapps\\common\\American Truck Simulator",
-                        )
-                      }
+                      onClick={() => {
+                        setCustomAtsPath("");
+                        localStorage.removeItem("nsm_ats_path");
+                        refreshSystemStatus(customEts2Path, "");
+                      }}
                       className="text-[11px] text-sky-400 hover:underline cursor-pointer"
                     >
-                      Reset ke Default Drive F:
+                      Gunakan Deteksi Otomatis Steam
                     </button>
                   </div>
                 </div>
@@ -753,13 +809,29 @@ export default function App() {
 
               {/* Endpoint & Token Card */}
               <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
-                <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
-                  Koneksi Server & Akun
-                </h3>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">
+                      Koneksi Server 24/7 & Token Driver
+                    </h3>
+                    {resolvedConfigPath && (
+                      <p className="text-[11px] text-slate-400 font-mono mt-0.5">
+                        Lokasi Config: {resolvedConfigPath}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={handleSavePluginConfig}
+                    className="px-4 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Simpan ke Game Config</span>
+                  </button>
+                </div>
 
                 <div>
                   <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                    Server Backend URL
+                    Server Backend URL (24/7 Tracker Server)
                   </label>
                   <input
                     type="text"
@@ -773,7 +845,7 @@ export default function App() {
                   />
                   <span className="text-[11px] text-slate-500 mt-1 block">
                     Gunakan http://localhost:3100 untuk development lokal, atau
-                    https://beta.nismara.web.id untuk live production.
+                    IP/Domain server 24/7 Nismara Tracker saat live production.
                   </span>
                 </div>
 
@@ -788,7 +860,7 @@ export default function App() {
                       setDriverToken(e.target.value);
                       localStorage.setItem("nsm_driver_token", e.target.value);
                     }}
-                    placeholder="NSM-XXXXXX-XXXXXX-..."
+                    placeholder="Masukkan token Anda dari Dashboard Website (NSM-XXXXXX-...)"
                     className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700 text-slate-100 text-sm focus:outline-none focus:border-sky-500 font-mono"
                   />
                 </div>

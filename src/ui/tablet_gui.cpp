@@ -619,21 +619,31 @@ void TabletGui::LoadTrueTypeFonts() {
         fonts_dir = std::filesystem::path(win_dir) / "Fonts";
     }
 
-    const auto pick_existing = [&fonts_dir](std::initializer_list<const char*> candidates) -> std::string {
+    const std::filesystem::path extra_font_dirs[] = {
+        fonts_dir,
+        "Z:\\usr\\share\\fonts\\truetype\\dejavu",
+        "Z:\\usr\\share\\fonts\\TTF",
+        "Z:\\usr\\share\\fonts\\liberation",
+        "Z:\\System\\Library\\Fonts",
+    };
+
+    const auto pick_existing = [&extra_font_dirs](std::initializer_list<const char*> candidates) -> std::string {
         std::error_code ec;
-        for (const char* name : candidates) {
-            const auto p = fonts_dir / name;
-            if (std::filesystem::exists(p, ec)) {
-                return p.string();
+        for (const auto& dir : extra_font_dirs) {
+            for (const char* name : candidates) {
+                const auto p = dir / name;
+                if (std::filesystem::exists(p, ec)) {
+                    return p.string();
+                }
             }
         }
         return {};
     };
 
-    // Prefer Segoe UI Semibold / Regular / Bold (clean modern sans-serif matching iOS SF Pro aesthetics)
-    const std::string regular_path  = pick_existing({"seguisb.ttf", "segoeui.ttf", "arial.ttf"});
-    const std::string semibold_path = pick_existing({"segoeuib.ttf", "seguisb.ttf", "arialbd.ttf"});
-    const std::string clock_path    = pick_existing({"segoeuib.ttf", "seguisb.ttf", "segoeui.ttf"});
+    // Prefer Segoe UI Semibold / Regular / Bold (with Wine/Proton/Linux/macOS fallbacks)
+    const std::string regular_path  = pick_existing({"seguisb.ttf", "segoeui.ttf", "arial.ttf", "tahoma.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf", "SFNS.ttf"});
+    const std::string semibold_path = pick_existing({"segoeuib.ttf", "seguisb.ttf", "arialbd.ttf", "tahomabd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf", "SFNS.ttf"});
+    const std::string clock_path    = pick_existing({"segoeuib.ttf", "seguisb.ttf", "segoeui.ttf", "arialbd.ttf", "tahomabd.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf"});
 
     ImFontConfig cfg = {};
     cfg.OversampleH = 3;
@@ -3209,19 +3219,19 @@ void TabletGui::RenderAppWallpapers(const nismara::core::DriverAccountProfile& a
         // --- TAB 1: FOTO DISK ---
         if (ImGui::BeginChild("##LocalWallpapersCard", ImVec2(0.0f, 270.0f), true)) {
             ImGui::PushFont(font_semibold_);
-            ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "CUSTOM IMAGES (plugins/wallpapers/)");
+            ImGui::TextColored(ImVec4(0.20f, 0.83f, 0.60f, 1.0f), "CUSTOM IMAGES (Documents/<Game>/wallpapers/)");
             ImGui::PopFont();
             ImGui::SameLine(ImGui::GetWindowWidth() - 78.0f);
             if (ImGui::SmallButton("Rescan")) {
                 TextureManager::Instance().RequestReload();
             }
 
-            ImGui::TextDisabled("Place .png, .jpg, .webp, or .bmp in plugins/wallpapers/");
+            ImGui::TextDisabled("Place .png, .jpg, .webp, or .bmp in Documents/<Game>/wallpapers/");
             ImGui::Spacing();
 
             const auto& files = TextureManager::Instance().GetAvailableFiles();
             if (files.empty()) {
-                ImGui::TextDisabled("No image files found in plugins/wallpapers/ yet.");
+                ImGui::TextDisabled("No image files found in Documents/<Game>/wallpapers/ yet.");
             } else {
                 for (size_t idx = 0; idx < files.size(); ++idx) {
                     ImGui::PushID(500 + static_cast<int>(idx));

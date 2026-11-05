@@ -70,14 +70,29 @@ public:
     void SetAutoLockOnClose(bool auto_lock);
 
     /**
-     * @brief Returns the resolved absolute path of nismara_config.dat.
+     * @brief Returns the resolved absolute path of nismara_config.dat
+     *        (inside Documents\<Game>\nismara_config.dat).
      */
     std::filesystem::path GetConfigFilePath() const;
 
     /**
-     * @brief Returns the resolved directory for custom wallpaper images (plugins/wallpapers).
+     * @brief Returns the resolved directory for custom wallpaper images
+     *        (inside Documents\<Game>\wallpapers).
      */
     std::filesystem::path GetWallpapersDirectory() const;
+
+    /**
+     * @brief Returns the resolved game user data directory
+     *        (e.g., Documents\Euro Truck Simulator 2 or -homedir equivalent),
+     *        where game.log.txt, profiles/, save/.../game.sii, and nismara_config.dat reside.
+     */
+    std::filesystem::path GetGameUserDataDirectory() const;
+
+    /**
+     * @brief Returns the cross-platform heartbeat lockfile path used by Companion Gatekeeper
+     *        (Documents\<Game>\nismara_companion_alive.lock).
+     */
+    std::filesystem::path GetHeartbeatFilePath() const;
 
 private:
     ConfigManager();
@@ -87,8 +102,10 @@ private:
 
     mutable std::mutex mutex_;
     PluginConfig config_{};
+    std::filesystem::path game_user_dir_{};
     std::filesystem::path config_path_{};
     std::filesystem::path wallpapers_dir_{};
+    std::filesystem::path heartbeat_path_{};
 };
 
 } // namespace nismara::core

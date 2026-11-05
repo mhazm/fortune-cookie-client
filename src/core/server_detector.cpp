@@ -1,4 +1,5 @@
 #include "core/server_detector.hpp"
+#include "core/config_manager.hpp"
 #include "core/telemetry_state.hpp"
 
 #include <winsock2.h>
@@ -129,10 +130,31 @@ struct NetworkInspectResult {
     std::string summary{};
 };
 
+uint16_t ExtractPortFromUrl(const std::string& url) {
+    const auto scheme_pos = url.find("://");
+    const size_t host_start = (scheme_pos == std::string::npos) ? 0 : scheme_pos + 3;
+    const size_t path_start = url.find('/', host_start);
+    const std::string authority = (path_start == std::string::npos)
+                                      ? url.substr(host_start)
+                                      : url.substr(host_start, path_start - host_start);
+    const auto colon = authority.rfind(':');
+    if (colon != std::string::npos && colon + 1 < authority.size()) {
+        try {
+            const int p = std::stoi(authority.substr(colon + 1));
+            if (p > 0 && p <= 65535) {
+                return static_cast<uint16_t>(p);
+            }
+        } catch (...) {
+        }
+    }
+    return 0;
+}
+
 NetworkInspectResult InspectProcessNetworkSockets() {
     NetworkInspectResult res{};
     const DWORD current_pid = GetCurrentProcessId();
     std::vector<std::string> endpoints;
+    const uint16_t custom_api_port = ExtractPortFromUrl(ConfigManager::Instance().GetConfig().api_base_url);
 
     // 1. Inspect IPv4 TCP Table for current game process
     DWORD tcp_size = 0;
@@ -148,9 +170,11 @@ NetworkInspectResult InspectProcessNetworkSockets() {
                 }
                 const uint32_t remote_ip_host = ntohl(row.dwRemoteAddr);
                 const uint16_t remote_port = ntohs(static_cast<u_short>(row.dwRemotePort));
-                // Ignore loopback (127.x.x.x), 0.0.0.0, and standard HTTP/HTTPS web calls (80, 443, 3000)
+                // Ignore loopback (127.x.x.x), 0.0.0.0, standard HTTP/HTTPS web calls (80, 443, 3000, 3100),
+                // and the configured 24/7 Nismara Tracker Server port.
                 if (remote_ip_host == 0 || (remote_ip_host >> 24) == 127 ||
-                    remote_port == 80 || remote_port == 443 || remote_port == 3000) {
+                    remote_port == 80 || remote_port == 443 || remote_port == 3000 ||
+                    remote_port == 3100 || (custom_api_port != 0 && remote_port == custom_api_port)) {
                     continue;
                 }
 
@@ -333,15 +357,22 @@ void ServerDetector::PerformScan() {
         docs_dir = docs_w;
     }
 
+    std::filesystem::path game_log_path =
+        ConfigManager::Instance().GetGameUserDataDirectory() / L"game.log.txt";
+    std::error_code log_ec;
+    if ((game_log_path.empty() || !std::filesystem::exists(game_log_path, log_ec)) && !docs_dir.empty()) {
+        game_log_path = docs_dir /
+                        (is_ats ? L"American Truck Simulator" : L"Euro Truck Simulator 2") /
+                        L"game.log.txt";
+    }
+
     bool convoy_session_active = false;
     bool physx_mp_server_running = false;
     bool log_mounts_haulmp = false;
     bool log_trucky_says_tmp = false;
     std::string last_mp_log_line = "No [mp] log entry found";
 
-    if (!docs_dir.empty()) {
-        const std::filesystem::path game_log_path =
-            docs_dir / (is_ats ? L"American Truck Simulator" : L"Euro Truck Simulator 2") / L"game.log.txt";
+    if (!game_log_path.empty()) {
         const std::string log_tail = ReadFileTailShared(game_log_path, 65536);
         if (!log_tail.empty()) {
             std::istringstream iss(log_tail);

@@ -1,10 +1,21 @@
 use serde::{Deserialize, Serialize};
-use std::ffi::OsStr;
+use std::collections::BTreeMap;
 use std::fs;
-use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
+#[cfg(target_os = "windows")]
 use winreg::enums::*;
+#[cfg(target_os = "windows")]
 use winreg::RegKey;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -18,90 +29,287 @@ pub struct GameInfo {
     pub plugin_dir: String,
     pub plugin_installed: bool,
     pub plugin_path: String,
+    pub user_data_dir: String,
+    pub config_path: String,
     pub is_running: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SystemStatus {
     pub companion_version: String,
+    pub os_platform: String,
     pub steam_installed: bool,
     pub steam_path: String,
     pub games: Vec<GameInfo>,
     pub gatekeeper_active: bool,
 }
 
-pub struct CompanionMutexGuard {
-    handle: windows_sys::Win32::Foundation::HANDLE,
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PluginConfigPayload {
+    pub driver_token: String,
+    pub api_base_url: String,
+    pub ets2_config_path: String,
+    pub ats_config_path: String,
 }
 
-unsafe impl Send for CompanionMutexGuard {}
-unsafe impl Sync for CompanionMutexGuard {}
+pub struct CompanionGatekeeperGuard {
+    #[cfg(target_os = "windows")]
+    handle: windows_sys::Win32::Foundation::HANDLE,
+    stop_flag: Arc<AtomicBool>,
+}
 
-impl Drop for CompanionMutexGuard {
+unsafe impl Send for CompanionGatekeeperGuard {}
+unsafe impl Sync for CompanionGatekeeperGuard {}
+
+impl Drop for CompanionGatekeeperGuard {
     fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe {
-                windows_sys::Win32::Foundation::CloseHandle(self.handle);
+        self.stop_flag.store(true, Ordering::SeqCst);
+        cleanup_heartbeat_files();
+        #[cfg(target_os = "windows")]
+        {
+            if !self.handle.is_null() {
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(self.handle);
+                }
             }
         }
     }
 }
 
-fn create_companion_mutex() -> Option<CompanionMutexGuard> {
-    let global_name: Vec<u16> = OsStr::new("Global\\NismaraCompanionRunning")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+fn get_home_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(up) = std::env::var("USERPROFILE") {
+            let p = PathBuf::from(up);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
 
-    let handle = unsafe {
-        windows_sys::Win32::System::Threading::CreateMutexW(
-            std::ptr::null_mut(),
-            0,
-            global_name.as_ptr(),
-        )
+fn get_primary_game_user_dir(game_id: &str) -> PathBuf {
+    let folder_name = if game_id == "ats" {
+        "American Truck Simulator"
+    } else {
+        "Euro Truck Simulator 2"
     };
 
-    if !handle.is_null() {
-        return Some(CompanionMutexGuard { handle });
+    if let Some(home) = get_home_dir() {
+        #[cfg(target_os = "windows")]
+        {
+            let docs = home.join("Documents");
+            if docs.exists() {
+                return docs.join(folder_name);
+            }
+            let onedrive_docs = home.join("OneDrive").join("Documents");
+            if onedrive_docs.exists() {
+                return onedrive_docs.join(folder_name);
+            }
+            return docs.join(folder_name);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            return home
+                .join("Library")
+                .join("Application Support")
+                .join(folder_name);
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+                let xdg_path = PathBuf::from(xdg);
+                if xdg_path.exists() {
+                    return xdg_path.join(folder_name);
+                }
+            }
+            return home.join(".local").join("share").join(folder_name);
+        }
     }
 
-    let local_name: Vec<u16> = OsStr::new("Local\\NismaraCompanionRunning")
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
+    PathBuf::from(folder_name)
+}
 
-    let local_handle = unsafe {
-        windows_sys::Win32::System::Threading::CreateMutexW(
-            std::ptr::null_mut(),
-            0,
-            local_name.as_ptr(),
-        )
-    };
-
-    if !local_handle.is_null() {
-        Some(CompanionMutexGuard { handle: local_handle })
+/// Returns all candidate user data directories for a game (including Steam Proton prefixes on Linux)
+fn get_all_game_user_dirs(game_id: &str, libraries: &[PathBuf]) -> Vec<PathBuf> {
+    let mut dirs = vec![get_primary_game_user_dir(game_id)];
+    let folder_name = if game_id == "ats" {
+        "American Truck Simulator"
     } else {
-        None
+        "Euro Truck Simulator 2"
+    };
+    let app_id = if game_id == "ats" { "270880" } else { "227300" };
+
+    // On Linux, if the user runs the Windows build of ETS2/ATS under Steam Proton,
+    // the game's Documents folder lives inside compatdata/<app_id>/pfx/drive_c/users/steamuser/Documents/<GameName>
+    for lib in libraries {
+        let proton_docs = lib
+            .join("steamapps")
+            .join("compatdata")
+            .join(app_id)
+            .join("pfx")
+            .join("drive_c")
+            .join("users")
+            .join("steamuser")
+            .join("Documents")
+            .join(folder_name);
+        if proton_docs.exists() && !dirs.contains(&proton_docs) {
+            dirs.push(proton_docs);
+        }
+    }
+
+    dirs
+}
+
+fn write_heartbeat_files() {
+    let steam_opt = get_steam_path();
+    let libraries = steam_opt
+        .as_ref()
+        .map(|sp| get_all_steam_library_folders(sp))
+        .unwrap_or_default();
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let payload = format!("alive={}\npid={}\n", ts, std::process::id());
+
+    for game_id in ["ets2", "ats"] {
+        for dir in get_all_game_user_dirs(game_id, &libraries) {
+            let _ = fs::create_dir_all(&dir);
+            let hb = dir.join("nismara_companion_alive.lock");
+            let _ = fs::write(&hb, &payload);
+        }
+    }
+}
+
+fn cleanup_heartbeat_files() {
+    let steam_opt = get_steam_path();
+    let libraries = steam_opt
+        .as_ref()
+        .map(|sp| get_all_steam_library_folders(sp))
+        .unwrap_or_default();
+
+    for game_id in ["ets2", "ats"] {
+        for dir in get_all_game_user_dirs(game_id, &libraries) {
+            let hb = dir.join("nismara_companion_alive.lock");
+            let _ = fs::remove_file(&hb);
+        }
+    }
+}
+
+fn create_companion_gatekeeper() -> CompanionGatekeeperGuard {
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop_flag);
+
+    // Immediately write initial heartbeat files and refresh every 4 seconds
+    write_heartbeat_files();
+    std::thread::spawn(move || {
+        while !thread_stop.load(Ordering::Relaxed) {
+            write_heartbeat_files();
+            std::thread::sleep(Duration::from_secs(4));
+        }
+    });
+
+    #[cfg(target_os = "windows")]
+    {
+        let global_name: Vec<u16> = OsStr::new("Global\\NismaraCompanionRunning")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let mut handle = unsafe {
+            windows_sys::Win32::System::Threading::CreateMutexW(
+                std::ptr::null_mut(),
+                0,
+                global_name.as_ptr(),
+            )
+        };
+
+        if handle.is_null() {
+            let local_name: Vec<u16> = OsStr::new("Local\\NismaraCompanionRunning")
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+
+            handle = unsafe {
+                windows_sys::Win32::System::Threading::CreateMutexW(
+                    std::ptr::null_mut(),
+                    0,
+                    local_name.as_ptr(),
+                )
+            };
+        }
+
+        CompanionGatekeeperGuard { handle, stop_flag }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        CompanionGatekeeperGuard { stop_flag }
     }
 }
 
 fn get_steam_path() -> Option<PathBuf> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    if let Ok(steam_key) = hkcu.open_subkey("Software\\Valve\\Steam") {
-        if let Ok(path_str) = steam_key.get_value::<String, _>("SteamPath") {
-            let p = PathBuf::from(path_str);
+    #[cfg(target_os = "windows")]
+    {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(steam_key) = hkcu.open_subkey("Software\\Valve\\Steam") {
+            if let Ok(path_str) = steam_key.get_value::<String, _>("SteamPath") {
+                let p = PathBuf::from(path_str);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        if let Ok(steam_key) = hklm.open_subkey("SOFTWARE\\WOW6432Node\\Valve\\Steam") {
+            if let Ok(path_str) = steam_key.get_value::<String, _>("InstallPath") {
+                let p = PathBuf::from(path_str);
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = get_home_dir() {
+            let p = home.join("Library").join("Application Support").join("Steam");
             if p.exists() {
                 return Some(p);
             }
         }
     }
 
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok(steam_key) = hklm.open_subkey("SOFTWARE\\WOW6432Node\\Valve\\Steam") {
-        if let Ok(path_str) = steam_key.get_value::<String, _>("InstallPath") {
-            let p = PathBuf::from(path_str);
-            if p.exists() {
-                return Some(p);
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(home) = get_home_dir() {
+            let candidates = [
+                home.join(".steam").join("steam"),
+                home.join(".local").join("share").join("Steam"),
+                home.join(".var")
+                    .join("app")
+                    .join("com.valvesoftware.Steam")
+                    .join(".local")
+                    .join("share")
+                    .join("Steam"),
+            ];
+            for cand in candidates {
+                if cand.exists() {
+                    return Some(cand);
+                }
             }
         }
     }
@@ -132,47 +340,145 @@ fn get_all_steam_library_folders(steam_path: &Path) -> Vec<PathBuf> {
     libraries
 }
 
-fn is_process_running(exe_name: &str) -> bool {
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
-    };
-    use windows_sys::Win32::Foundation::CloseHandle;
+fn is_process_running(exe_stem: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+            TH32CS_SNAPPROCESS,
+        };
 
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot.is_null() || snapshot == -1isize as _ {
-            return false;
-        }
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot.is_null() || snapshot == -1isize as _ {
+                return false;
+            }
 
-        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
 
-        let target_lower = exe_name.to_lowercase();
-        let mut found = false;
+            let target_win = format!("{}.exe", exe_stem).to_lowercase();
+            let target_raw = exe_stem.to_lowercase();
+            let mut found = false;
 
-        if Process32FirstW(snapshot, &mut entry) != 0 {
-            loop {
-                let name_len = entry
-                    .szExeFile
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(entry.szExeFile.len());
-                let process_name = String::from_utf16_lossy(&entry.szExeFile[..name_len]).to_lowercase();
+            if Process32FirstW(snapshot, &mut entry) != 0 {
+                loop {
+                    let name_len = entry
+                        .szExeFile
+                        .iter()
+                        .position(|&c| c == 0)
+                        .unwrap_or(entry.szExeFile.len());
+                    let process_name =
+                        String::from_utf16_lossy(&entry.szExeFile[..name_len]).to_lowercase();
 
-                if process_name == target_lower {
-                    found = true;
-                    break;
+                    if process_name == target_win || process_name == target_raw {
+                        found = true;
+                        break;
+                    }
+
+                    if Process32NextW(snapshot, &mut entry) == 0 {
+                        break;
+                    }
                 }
+            }
 
-                if Process32NextW(snapshot, &mut entry) == 0 {
-                    break;
+            CloseHandle(snapshot);
+            found
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(output) = std::process::Command::new("pgrep")
+            .args(["-i", exe_stem])
+            .output()
+        {
+            return output.status.success();
+        }
+        false
+    }
+}
+
+/// Migrates any legacy `nismara_config.dat` and `wallpapers/` out of `plugins/` into `Documents/<Game>/`
+fn migrate_legacy_plugin_files(plugin_dir: &Path, user_data_dir: &Path) {
+    if !plugin_dir.exists() || plugin_dir == user_data_dir {
+        return;
+    }
+
+    let _ = fs::create_dir_all(user_data_dir);
+    let legacy_cfg = plugin_dir.join("nismara_config.dat");
+    let target_cfg = user_data_dir.join("nismara_config.dat");
+
+    if legacy_cfg.exists() {
+        if !target_cfg.exists() {
+            let _ = fs::copy(&legacy_cfg, &target_cfg);
+        }
+        let _ = fs::remove_file(&legacy_cfg);
+    }
+
+    let legacy_wallpapers = plugin_dir.join("wallpapers");
+    let target_wallpapers = user_data_dir.join("wallpapers");
+    if legacy_wallpapers.exists() && legacy_wallpapers.is_dir() {
+        let _ = fs::create_dir_all(&target_wallpapers);
+        if let Ok(entries) = fs::read_dir(&legacy_wallpapers) {
+            for entry in entries.flatten() {
+                let dest = target_wallpapers.join(entry.file_name());
+                if !dest.exists() {
+                    let _ = fs::copy(entry.path(), dest);
                 }
             }
         }
-
-        CloseHandle(snapshot);
-        found
+        let _ = fs::remove_dir_all(&legacy_wallpapers);
     }
+}
+
+/// Checks a candidate game installation root for Windows/Proton (.exe), Linux Native, or macOS (.app)
+fn probe_game_directory(candidate: &Path, app_name: &str, exe_stem: &str) -> Option<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+    let win_exe_name = format!("{}.exe", exe_stem);
+
+    // 1. Windows / Steam Proton layout: <root>/bin/win_x64/<exe>.exe
+    let win_exe = candidate.join("bin").join("win_x64").join(&win_exe_name);
+    if win_exe.exists() {
+        let p_dir = candidate.join("bin").join("win_x64").join("plugins");
+        let p_file = p_dir.join("NismaraTracker.dll");
+        return Some((candidate.to_path_buf(), win_exe, p_dir, p_file));
+    }
+
+    // 2. Direct bin/win_x64 folder selected by user
+    let direct_win_exe = candidate.join(&win_exe_name);
+    if direct_win_exe.exists() {
+        let root = candidate
+            .parent()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| candidate.to_path_buf());
+        let p_dir = candidate.join("plugins");
+        let p_file = p_dir.join("NismaraTracker.dll");
+        return Some((root, direct_win_exe, p_dir, p_file));
+    }
+
+    // 3. Linux Native layout: <root>/bin/linux_x64/<exe>
+    let linux_exe = candidate.join("bin").join("linux_x64").join(exe_stem);
+    if linux_exe.exists() {
+        let p_dir = candidate.join("bin").join("linux_x64").join("plugins");
+        let p_file = p_dir.join("libNismaraTracker.so");
+        return Some((candidate.to_path_buf(), linux_exe, p_dir, p_file));
+    }
+
+    // 4. macOS Native layout: <root>/<AppName>.app/Contents/MacOS/<exe>
+    let mac_app_dir = candidate
+        .join(format!("{}.app", app_name))
+        .join("Contents")
+        .join("MacOS");
+    let mac_exe = mac_app_dir.join(exe_stem);
+    if mac_exe.exists() {
+        let p_dir = mac_app_dir.join("plugins");
+        let p_file = p_dir.join("libNismaraTracker.dylib");
+        return Some((candidate.to_path_buf(), mac_exe, p_dir, p_file));
+    }
+
+    None
 }
 
 fn detect_games(
@@ -181,13 +487,13 @@ fn detect_games(
     custom_ats_path: Option<&str>,
 ) -> Vec<GameInfo> {
     let game_targets = [
-        ("ets2", "Euro Truck Simulator 2", 227300u32, "eurotrucks2.exe", custom_ets2_path),
-        ("ats", "American Truck Simulator", 270880u32, "amtrucks.exe", custom_ats_path),
+        ("ets2", "Euro Truck Simulator 2", 227300u32, "eurotrucks2", custom_ets2_path),
+        ("ats", "American Truck Simulator", 270880u32, "amtrucks", custom_ats_path),
     ];
 
     let mut result = Vec::new();
 
-    for (id, name, app_id, exe_name, custom_path_opt) in game_targets {
+    for (id, name, app_id, exe_stem, custom_path_opt) in game_targets {
         let mut installed = false;
         let mut game_root = PathBuf::new();
         let mut exe_file = PathBuf::new();
@@ -195,56 +501,51 @@ fn detect_games(
         let mut plugin_file = PathBuf::new();
         let mut plugin_found = false;
 
-        // 1. Direct manual check if user specified custom directory
+        let user_data_dir = get_primary_game_user_dir(id);
+        let config_path = user_data_dir.join("nismara_config.dat");
+
+        // 1. Check user-specified custom directory if provided
         if let Some(custom) = custom_path_opt {
             let trimmed = custom.trim();
             if !trimmed.is_empty() {
                 let candidate_dir = PathBuf::from(trimmed);
-                let cand_exe1 = candidate_dir.join("bin").join("win_x64").join(exe_name);
-                let cand_exe2 = candidate_dir.join(exe_name);
-
-                if cand_exe1.exists() {
+                if let Some((root, exe, p_dir, p_file)) =
+                    probe_game_directory(&candidate_dir, name, exe_stem)
+                {
                     installed = true;
-                    game_root = candidate_dir;
-                    exe_file = cand_exe1;
-                    plugin_dir = game_root.join("bin").join("win_x64").join("plugins");
-                    plugin_file = plugin_dir.join("NismaraTracker.dll");
-                    plugin_found = plugin_file.exists();
-                } else if cand_exe2.exists() {
-                    installed = true;
-                    game_root = candidate_dir
-                        .parent()
-                        .and_then(|p| p.parent())
-                        .map(Path::to_path_buf)
-                        .unwrap_or_else(|| candidate_dir.clone());
-                    exe_file = cand_exe2;
-                    plugin_dir = candidate_dir.join("plugins");
-                    plugin_file = plugin_dir.join("NismaraTracker.dll");
+                    game_root = root;
+                    exe_file = exe;
+                    plugin_dir = p_dir;
+                    plugin_file = p_file;
                     plugin_found = plugin_file.exists();
                 }
             }
         }
 
-        // 2. Fallback: check auto-detected libraries
+        // 2. Auto-detect across all Steam library folders (libraryfolders.vdf)
         if !installed {
             for lib in libraries {
                 let candidate_root = lib.join("steamapps").join("common").join(name);
-                let candidate_exe = candidate_root.join("bin").join("win_x64").join(exe_name);
-
-                if candidate_exe.exists() {
+                if let Some((root, exe, p_dir, p_file)) =
+                    probe_game_directory(&candidate_root, name, exe_stem)
+                {
                     installed = true;
-                    game_root = candidate_root;
-                    exe_file = candidate_exe;
-                    plugin_dir = game_root.join("bin").join("win_x64").join("plugins");
-                    plugin_file = plugin_dir.join("NismaraTracker.dll");
+                    game_root = root;
+                    exe_file = exe;
+                    plugin_dir = p_dir;
+                    plugin_file = p_file;
                     plugin_found = plugin_file.exists();
                     break;
                 }
             }
         }
 
+        if installed {
+            migrate_legacy_plugin_files(&plugin_dir, &user_data_dir);
+        }
+
         let is_running = if installed {
-            is_process_running(exe_name)
+            is_process_running(exe_stem)
         } else {
             false
         };
@@ -259,11 +560,171 @@ fn detect_games(
             plugin_dir: plugin_dir.to_string_lossy().to_string(),
             plugin_installed: plugin_found,
             plugin_path: plugin_file.to_string_lossy().to_string(),
+            user_data_dir: user_data_dir.to_string_lossy().to_string(),
+            config_path: config_path.to_string_lossy().to_string(),
             is_running,
         });
     }
 
     result
+}
+
+fn read_kv_config(path: &Path) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    if let Ok(content) = fs::read_to_string(path) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+                continue;
+            }
+            if let Some(sep) = trimmed.find('=') {
+                let k = trimmed[..sep].trim().to_string();
+                let v = trimmed[sep + 1..].trim().to_string();
+                map.insert(k, v);
+            }
+        }
+    }
+    map
+}
+
+fn write_kv_config(path: &Path, driver_token: &str, api_base_url: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Gagal membuat folder konfigurasi {:?}: {}", parent, e))?;
+        let wallpapers = parent.join("wallpapers");
+        let _ = fs::create_dir_all(wallpapers);
+    }
+
+    let mut existing = read_kv_config(path);
+    let clean_url = api_base_url.trim().trim_end_matches('/');
+    let final_url = if clean_url.is_empty() {
+        "http://localhost:3100"
+    } else {
+        clean_url
+    };
+
+    existing.insert("driver_token".to_string(), driver_token.trim().to_string());
+    existing.insert("api_base_url".to_string(), final_url.to_string());
+
+    let steam_id = existing.get("steam_id").cloned().unwrap_or_default();
+    let hotkey = existing
+        .get("toggle_hotkey_vk")
+        .cloned()
+        .unwrap_or_else(|| "122".to_string());
+    let start_vis = existing
+        .get("overlay_start_visible")
+        .cloned()
+        .unwrap_or_else(|| "0".to_string());
+    let lock_wall = existing
+        .get("lockscreen_wallpaper")
+        .cloned()
+        .unwrap_or_else(|| "preset:ultramarine".to_string());
+    let home_wall = existing
+        .get("homescreen_wallpaper")
+        .cloned()
+        .unwrap_or_else(|| "preset:midnight".to_string());
+    let frame_col = existing
+        .get("phone_frame_color")
+        .cloned()
+        .unwrap_or_else(|| "0".to_string());
+    let auto_lock = existing
+        .get("auto_lock_on_close")
+        .cloned()
+        .unwrap_or_else(|| "1".to_string());
+
+    let serialized = format!(
+        "# Nismara OS iPhone 16 Simulation Unit Configuration\n\
+         driver_token={}\n\
+         api_base_url={}\n\
+         steam_id={}\n\
+         toggle_hotkey_vk={}\n\
+         overlay_start_visible={}\n\
+         lockscreen_wallpaper={}\n\
+         homescreen_wallpaper={}\n\
+         phone_frame_color={}\n\
+         auto_lock_on_close={}\n",
+        driver_token.trim(),
+        final_url,
+        steam_id,
+        hotkey,
+        start_vis,
+        lock_wall,
+        home_wall,
+        frame_col,
+        auto_lock
+    );
+
+    fs::write(path, serialized)
+        .map_err(|e| format!("Gagal menyimpan {:?}: {}", path, e))
+}
+
+#[tauri::command]
+async fn get_plugin_config() -> Result<PluginConfigPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let ets2_dir = get_primary_game_user_dir("ets2");
+        let ats_dir = get_primary_game_user_dir("ats");
+        let ets2_cfg = ets2_dir.join("nismara_config.dat");
+        let ats_cfg = ats_dir.join("nismara_config.dat");
+
+        let mut map = read_kv_config(&ets2_cfg);
+        if map.is_empty() {
+            map = read_kv_config(&ats_cfg);
+        }
+
+        let driver_token = map.get("driver_token").cloned().unwrap_or_default();
+        let api_base_url = map
+            .get("api_base_url")
+            .cloned()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "http://localhost:3100".to_string());
+
+        PluginConfigPayload {
+            driver_token,
+            api_base_url,
+            ets2_config_path: ets2_cfg.to_string_lossy().to_string(),
+            ats_config_path: ats_cfg.to_string_lossy().to_string(),
+        }
+    })
+    .await
+    .map_err(|e| format!("Failed to read plugin config: {}", e))
+}
+
+#[tauri::command]
+async fn save_plugin_config(
+    driver_token: String,
+    api_base_url: String,
+) -> Result<PluginConfigPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let steam_opt = get_steam_path();
+        let libraries = steam_opt
+            .as_ref()
+            .map(|sp| get_all_steam_library_folders(sp))
+            .unwrap_or_default();
+
+        for game_id in ["ets2", "ats"] {
+            for dir in get_all_game_user_dirs(game_id, &libraries) {
+                let cfg_path = dir.join("nismara_config.dat");
+                write_kv_config(&cfg_path, &driver_token, &api_base_url)?;
+            }
+        }
+
+        let ets2_cfg = get_primary_game_user_dir("ets2").join("nismara_config.dat");
+        let ats_cfg = get_primary_game_user_dir("ats").join("nismara_config.dat");
+        let clean_url = api_base_url.trim().trim_end_matches('/');
+
+        Ok(PluginConfigPayload {
+            driver_token: driver_token.trim().to_string(),
+            api_base_url: if clean_url.is_empty() {
+                "http://localhost:3100".to_string()
+            } else {
+                clean_url.to_string()
+            },
+            ets2_config_path: ets2_cfg.to_string_lossy().to_string(),
+            ats_config_path: ats_cfg.to_string_lossy().to_string(),
+        })
+    })
+    .await
+    .map_err(|e| format!("Failed to save plugin config: {}", e))?
 }
 
 #[tauri::command]
@@ -293,6 +754,7 @@ async fn get_system_status(
 
         SystemStatus {
             companion_version: "1.0.0".to_string(),
+            os_platform: std::env::consts::OS.to_string(),
             steam_installed,
             steam_path: steam_path_str,
             games,
@@ -316,55 +778,78 @@ async fn install_plugin(
             Vec::new()
         };
 
-        let custom_ets2 = if game_id == "ets2" { custom_game_path.as_deref() } else { None };
-        let custom_ats = if game_id == "ats" { custom_game_path.as_deref() } else { None };
+        let custom_ets2 = if game_id == "ets2" {
+            custom_game_path.as_deref()
+        } else {
+            None
+        };
+        let custom_ats = if game_id == "ats" {
+            custom_game_path.as_deref()
+        } else {
+            None
+        };
 
         let games = detect_games(&libraries, custom_ets2, custom_ats);
 
         let target_game = games
             .into_iter()
             .find(|g| g.id == game_id)
-            .ok_or_else(|| format!("Game '{}' belum terdeteksi. Silakan tentukan direktori game di Settings.", game_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "Game '{}' belum terdeteksi. Silakan tentukan direktori game di Settings.",
+                    game_id
+                )
+            })?;
 
         if !target_game.is_installed {
-            return Err(format!("Direktori {} tidak valid atau executable game tidak ditemukan.", target_game.name));
+            return Err(format!(
+                "Direktori {} tidak valid atau executable game tidak ditemukan.",
+                target_game.name
+            ));
         }
 
-        // Candidates for source NismaraTracker.dll
+        let target_plugin_file = PathBuf::from(&target_game.plugin_path);
+        let binary_name = target_plugin_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("NismaraTracker.dll");
+
         let candidate_sources = [
-            PathBuf::from("../bin/NismaraTracker.dll"),
-            PathBuf::from("bin/NismaraTracker.dll"),
-            PathBuf::from("../../bin/NismaraTracker.dll"),
-            PathBuf::from("NismaraTracker.dll"),
-            PathBuf::from("resources/NismaraTracker.dll"),
-            PathBuf::from("../resources/NismaraTracker.dll"),
+            PathBuf::from(format!("../bin/{}", binary_name)),
+            PathBuf::from(format!("bin/{}", binary_name)),
+            PathBuf::from(format!("../../bin/{}", binary_name)),
+            PathBuf::from(binary_name),
+            PathBuf::from(format!("resources/{}", binary_name)),
+            PathBuf::from(format!("../resources/{}", binary_name)),
         ];
 
-        let mut source_dll = None;
+        let mut source_bin = None;
         for cand in &candidate_sources {
             if cand.exists() {
-                source_dll = Some(cand.clone());
+                source_bin = Some(cand.clone());
                 break;
             }
         }
 
-        // Fallback: check current directory of companion app & resources subfolder
-        if source_dll.is_none() {
+        if source_bin.is_none() {
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(parent) = exe_path.parent() {
-                    let candidate1 = parent.join("NismaraTracker.dll");
-                    let candidate2 = parent.join("resources").join("NismaraTracker.dll");
+                    let candidate1 = parent.join(binary_name);
+                    let candidate2 = parent.join("resources").join(binary_name);
                     if candidate1.exists() {
-                        source_dll = Some(candidate1);
+                        source_bin = Some(candidate1);
                     } else if candidate2.exists() {
-                        source_dll = Some(candidate2);
+                        source_bin = Some(candidate2);
                     }
                 }
             }
         }
 
-        let src = source_dll.ok_or_else(|| {
-            "Source binary 'NismaraTracker.dll' tidak ditemukan dalam paket companion.".to_string()
+        let src = source_bin.ok_or_else(|| {
+            format!(
+                "Source binary '{}' tidak ditemukan dalam paket companion.",
+                binary_name
+            )
         })?;
 
         let dest_dir = PathBuf::from(&target_game.plugin_dir);
@@ -373,17 +858,20 @@ async fn install_plugin(
                 .map_err(|e| format!("Gagal membuat direktori plugins: {}", e))?;
         }
 
-        let dest_file = PathBuf::from(&target_game.plugin_path);
-        fs::copy(&src, &dest_file).map_err(|e| {
+        fs::copy(&src, &target_plugin_file).map_err(|e| {
             format!(
-                "Gagal menyalin NismaraTracker.dll (game mungkin sedang berjalan dan me-lock file): {}",
-                e
+                "Gagal menyalin {} (game mungkin sedang berjalan dan me-lock file): {}",
+                binary_name, e
             )
         })?;
 
+        // Ensure any old config/wallpapers in plugins/ are migrated to Documents/<Game>/
+        let user_data_dir = PathBuf::from(&target_game.user_data_dir);
+        migrate_legacy_plugin_files(&dest_dir, &user_data_dir);
+
         Ok(format!(
-            "Berhasil memasang NismaraTracker.dll ke {}!",
-            target_game.name
+            "Berhasil memasang {} ke {}!",
+            binary_name, target_game.name
         ))
     })
     .await
@@ -399,32 +887,52 @@ fn launch_game(game_id: String) -> Result<String, String> {
     };
 
     let steam_uri = format!("steam://rungameid/{}", app_id);
-    std::process::Command::new("cmd")
-        .args(["/c", "start", &steam_uri])
-        .spawn()
-        .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", &steam_uri])
+            .spawn()
+            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&steam_uri)
+            .spawn()
+            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&steam_uri)
+            .spawn()
+            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
+    }
 
     Ok(format!("Sent launch command to Steam for App ID {}", app_id))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let mutex_guard = create_companion_mutex();
+    let gatekeeper_guard = create_companion_gatekeeper();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            if let Some(guard) = mutex_guard {
-                app.manage(guard);
-            }
+            app.manage(gatekeeper_guard);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             install_plugin,
-            launch_game
+            launch_game,
+            get_plugin_config,
+            save_plugin_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nismara Companion");

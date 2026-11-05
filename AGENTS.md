@@ -61,7 +61,7 @@ nismara-tracker/
 │   ├── core/
 │   │   ├── telemetry_state.hpp          # Thread-safe singleton penyimpanan data telemetri, akun, fleet, garage, job
 │   │   ├── scs_callbacks.hpp            # Deklarasi callback SCS SDK (frame, channel, config, gameplay events)
-│   │   ├── config_manager.hpp           # Load/save konfigurasi lokal (plugins/nismara_config.dat)
+│   │   ├── config_manager.hpp           # Load/save konfigurasi lokal (Documents/<Game>/nismara_config.dat)
 │   │   ├── api_client.hpp               # Async WinHTTP client (/me, /jobs/start, /jobs/complete, /jobs/cancel)
 │   │   └── server_detector.hpp          # Detektor server bermain (Singleplayer, SCS Convoy, TruckersMP, HaulMP)
 │   ├── hooks/
@@ -77,7 +77,7 @@ nismara-tracker/
 │   ├── core/
 │   │   ├── telemetry_state.cpp          # Implementasi thread-safe getter/setter TelemetryState
 │   │   ├── scs_callbacks.cpp            # Parser atribut SCS SDK, fleet matching, akumulasi damage, & job lifecycle
-│   │   ├── config_manager.cpp           # Parser & writer nismara_config.dat + auto-create folder plugins/wallpapers/
+│   │   ├── config_manager.cpp           # Parser & writer Documents/<Game>/nismara_config.dat + auto-create folder wallpapers/
 │   │   ├── api_client.cpp               # Worker thread WinHTTP & JSON parsing respons backend
 │   │   └── server_detector.cpp          # Logika deteksi modul DLL (core_ets2mp.dll, haulmp_stub.dll) & game.log.txt
 │   ├── hooks/
@@ -158,7 +158,7 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 - Hooking `WndProc` (`F11` untuk membuka/menutup HP) + bypass penguncian kursor Win32 & DirectInput8 agar mouse dapat mengklik UI dengan bebas tanpa menggerakkan kamera truk.
 
 ### Phase 2: Sinkronisasi Akun Driver (`NSM-...`)
-- Konfigurasi lokal disimpan secara otomatis di `<GameFolder>/bin/win_x64/plugins/nismara_config.dat`.
+- Konfigurasi lokal disimpan secara otomatis di direktori dokumen user game (`Documents\Euro Truck Simulator 2\nismara_config.dat` atau `Documents\American Truck Simulator\nismara_config.dat`, dengan dukungan parameter `-homedir` dan path XDG/macOS), sehingga folder instalasi `bin/win_x64/plugins/` tetap bersih (hanya berisi binary `NismaraTracker.dll`) dan satu lokasi dengan `game.log.txt` serta `profiles/.../save/.../game.sii`.
 - Verifikasi token driver (`NSM-XXXXXX-...`) ke `/api/tracker/me` secara asynchronous.
 - Menampilkan nama driver, rank, level, EXP, Nismara+ status, dan saldo **Nismara Cash (NC)** secara real-time.
 
@@ -169,7 +169,7 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 - **Dynamic Island**: Pill interaktif di bagian atas layar yang menampilkan nomor lambung fleet aktif (`NL-074 | 80 km/h`) dan dapat diklik untuk melakukan *expand* informasi detail (kecepatan, gigi, sisa jarak navigasi, atau bahan bakar & RPM).
 - **Default & Custom Wallpaper**:
   - 5 Preset tema iOS 18 (*Ultramarine*, *Midnight*, *Executive Gold*, *Cyberpunk*, *Sunset*) yang menampilkan logo resmi **`Nismara Group Logo.svg`** tepat di tengah wallpaper.
-  - Mendukung pemilihan gambar kustom dari folder `plugins/wallpapers/` secara terpisah untuk Lock Screen dan Home Screen.
+  - Mendukung pemilihan gambar kustom dari folder `Documents\<Game>\wallpapers\` secara terpisah untuk Lock Screen dan Home Screen.
 
 ### Phase 4: Sinkronisasi Kendaraan In-Game $\leftrightarrow$ Database `fleets` & `garages`
 - Setiap kali truk di dalam game berganti atau akun selesai disinkronisasi, `TelemetryState::MatchActiveVehicleWithFleet` mencocokkan truk in-game dengan daftar `fleets` milik driver di database:
@@ -257,11 +257,56 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 3. **Ekosistem Auto-Updater (`@tauri-apps/plugin-updater`)**:
    - Backend `nismara-tracker-server` menyediakan manifest pembaruan versi di `GET /api/tracker/update.json`.
    - Menggunakan pasangan kunci Minisign untuk validasi integritas binary pembaruan secara kriptografis (`pubkey` terdaftar di `tauri.conf.json`).
-   - Menyediakan kemampuan auto-update untuk aplikasi desktop sekaligus auto-deploy `NismaraTracker.dll` terbaru ke direktori `plugins/` game yang terdeteksi.
+   - Menyediakan kemampuan auto-update untuk aplikasi desktop sekaligus auto-deploy binary plugin terbaru ke direktori `plugins/` game yang terdeteksi.
 
 ---
 
-## 6. Cara Build, Deploy, dan Menjalankan Proyek
+## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
+
+Proyek ini digunakan oleh sekitar **300+ pengemudi aktif VTC Nismara Transport** dengan spesifikasi perangkat, sistem operasi, dan struktur penyimpanan yang sangat beragam. Seluruh desain dan kode di `nismara-tracker`, `nismara-companion`, dan `nismara-tracker-server` **WAJIB** mematuhi tiga pilar produksi berikut:
+
+### A. Skala Multi-User (~300+ Orang) & Direktori Dinamis (Zero Hardcoded Paths/Tokens)
+1. **Tidak Boleh Ada Path atau Token Hardcoded Milik Developer**:
+   - Setiap pengguna memiliki lokasi instalasi Steam, library game (`C:\`, `D:\`, `E:\`, `/home/user/.steam`, `/Users/user/Library/Application Support/Steam`, dll.), serta lokasi folder profil (`Documents\Euro Truck Simulator 2` atau custom `-homedir`) yang berbeda-beda.
+   - Jangan pernah menjadikan token personal developer (`NSM-...`) atau path lokal developer (seperti `F:\SteamLibrary\...`) sebagai nilai default di UI Companion maupun C++ plugin. Nilai default token dan custom path override harus kosong (`""`) untuk pengguna baru.
+2. **Resolusi Direktori Otomatis, Penyimpanan di `Documents\<Game>`, & Kemudahan Akses `game.sii`**:
+   - `Nismara Companion` wajib mendeteksi lokasi instalasi game secara otomatis melalui parsing `libraryfolders.vdf` lintas drive/partisi, serta menyediakan opsi pemilihan folder manual bagi pengguna dengan instalasi kustom.
+   - Seluruh file konfigurasi dan data lokal (`nismara_config.dat`, folder `wallpapers/`, dan file heartbeat gatekeeper) **TIDAK** disimpan di dalam folder `bin/win_x64/plugins/` game agar folder `plugins/` tetap bersih (hanya berisi `NismaraTracker.dll`) dan bebas dari masalah izin tulis Administrator (`Program Files`).
+   - Sebaliknya, seluruh file tersebut disimpan terpusat di direktori data dokumen game pengguna:
+     - **Windows & Steam Proton**: `Documents\Euro Truck Simulator 2\` dan `Documents\American Truck Simulator\` (atau direktori `-homedir` jika pengguna memakai parameter launch `-homedir`).
+     - **Linux Native**: `~/.local/share/Euro Truck Simulator 2/` dan `~/.local/share/American Truck Simulator/`.
+     - **macOS**: `~/Library/Application Support/Euro Truck Simulator 2/` dan `~/Library/Application Support/American Truck Simulator/`.
+   - Penempatan terpusat di folder dokumen game ini juga memberikan akses langsung satu pintu ke `game.log.txt`, `config.cfg`, serta `profiles/` & `steam_profiles/` (`save/.../game.sii`) untuk pengembangan fitur lanjutan ke depannya.
+   - Saat pengguna mengisi `Driver Tracker Token` dan `Server Backend URL` di `Nismara Companion`, konfigurasi tersebut langsung disinkronkan secara otomatis ke `Documents\Euro Truck Simulator 2\nismara_config.dat` dan `Documents\American Truck Simulator\nismara_config.dat`.
+
+### B. Dukungan Lintas Sistem Operasi (Windows, Linux, dan macOS)
+Tidak semua anggota komunitas menggunakan Windows. Ekosistem Nismara harus mengutamakan kompatibilitas untuk **Windows**, **Linux**, dan **macOS**:
+1. **Nismara Companion (`nismara-companion` - Tauri v2)**:
+   - Kode Rust di `src-tauri/src/lib.rs` dan dependensi di `Cargo.toml` wajib memisahkan API spesifik OS menggunakan conditional compilation (`#[cfg(target_os = "windows")]`, `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`).
+   - **Deteksi Steam per OS**:
+     - **Windows**: Registry `HKCU\Software\Valve\Steam` / `HKLM\SOFTWARE\WOW6432Node\Valve\Steam` + `libraryfolders.vdf`.
+     - **Linux**: `~/.steam/steam`, `~/.local/share/Steam`, dan Flatpak (`~/.var/app/com.valvesoftware.Steam/.local/share/Steam`) + `libraryfolders.vdf`.
+     - **macOS**: `~/Library/Application Support/Steam` + `libraryfolders.vdf`.
+   - **Peluncuran Game (`steam://rungameid/<id>`)**: Menggunakan `cmd /c start` di Windows, `xdg-open` di Linux, dan `open` di macOS (atau `tauri-plugin-opener`).
+2. **In-Game Telemetry Plugin (`nismara-tracker`)**:
+   - **Linux via Steam Proton / Wine**: Banyak pengguna Linux menjalankan ETS2/ATS versi Windows melalui Proton (DXVK $\rightarrow$ DirectX 11). Agar `NismaraTracker.dll` berjalan mulus di dalam Proton/Wine:
+     - Pembuatan font di `tablet_gui.cpp` (`LoadTrueTypeFonts`) wajib memiliki fallback font multi-path (termasuk font bawaan Wine/Linux atau font default Dear ImGui) jika `Segoe UI` tidak tersedia di prefix Wine.
+     - Mekanisme **Gatekeeper** tidak boleh hanya mengandalkan Win32 Named Mutex (`Global\NismaraCompanionRunning`), karena proses native Linux `Nismara Companion` terpisah dari namespace Win32 Mutex di dalam container Wine/Proton. Wajib dilengkapi dengan **Cross-Platform Gatekeeper Heartbeat File** (misalnya file lock/heartbeat bertimestamp yang diperbarui oleh Companion) sebagai pendamping Win32 Mutex.
+   - **Linux Native (`.so`) & macOS Native (`.dylib`)**: Sistem build `CMakeLists.txt` dan abstraksi platform harus disiapkan agar dapat dikompilasi menjadi `NismaraTracker.dll` (`bin/win_x64/plugins/`), `libNismaraTracker.so` (`bin/linux_x64/plugins/`), dan `libNismaraTracker.dylib` (`Euro Truck Simulator 2.app/Contents/MacOS/plugins/`).
+
+### C. Server Produksi 24/7 (`nismara-tracker-server`)
+1. **Berjalan 24/7 dengan IP / Domain Publik Sendiri**:
+   - Saat development, `nismara-tracker-server` berjalan di `http://localhost:3100`.
+   - Saat production, server ini berjalan **24/7 di VPS/Dedicated Server khusus** yang memiliki IP publik atau domain sendiri untuk melayani ~300+ pengguna secara bersamaan.
+2. **Keamanan Autentikasi Multi-User Ketat (Tanpa Localhost Bypass)**:
+   - Di server 24/7 (terutama jika berada di balik reverse proxy seperti Nginx, Caddy, atau Cloudflare di mana `req.ip` terlihat sebagai `127.0.0.1`), middleware autentikasi (`src/middleware/authTracker.js`) **DILARANG KERAS** menyimpan variabel global `lastAuthenticatedUser` atau melakukan fallback ke user pertama di database ketika token tidak cocok!
+   - Setiap request HTTP dari plugin/companion wajib diautentikasi secara independen dan terisolasi menggunakan `Authorization: Bearer <trackerToken>` atau `x-tracker-token` milik masing-masing pengguna.
+3. **Pengecualian IP/Port Tracker Server dari Deteksi Socket Multiplayer**:
+   - Di `src/core/server_detector.cpp`, saat memindai koneksi TCP aktif milik proses game untuk mendeteksi SCS Convoy / Multiplayer, host dan port dari `api_base_url` (`nismara-tracker-server`) wajib dikecualikan agar koneksi HTTP keep-alive ke server tracker 24/7 tidak salah terdeteksi sebagai sesi multiplayer.
+
+---
+
+## 7. Cara Build, Deploy, dan Menjalankan Proyek
 
 ### A. Build & Deploy `NismaraTracker.dll`
 Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker`:
@@ -276,15 +321,15 @@ Jalankan perintah PowerShell berikut dari direktori `D:\Project\Nismara Transpor
 ```powershell
 node server.js
 ```
-Server akan berjalan di `http://localhost:3100` (endpoint health check: `GET http://localhost:3100/health`).
+Saat development server berjalan di `http://localhost:3100` (endpoint health check: `GET http://localhost:3100/health`), dan saat production berjalan 24/7 pada IP/domain server publik yang dikonfigurasi.
 
 ### C. Menjalankan & Membangun `Nismara Companion`
-Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker\nismara-companion`:
+Jalankan perintah berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker\nismara-companion`:
 - **Mode Development (Hot-Reload)**:
   ```powershell
   npm run tauri dev
   ```
-- **Kompilasi Standalone Release Installer (`.exe` / `.msi`)**:
+- **Kompilasi Standalone Release Installer (`.exe` / `.msi` di Windows, `.AppImage` / `.deb` di Linux, `.dmg` / `.app` di macOS)**:
   ```powershell
   npm run tauri build
   ```
@@ -292,11 +337,13 @@ Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transpor
 
 ---
 
-## 7. Aturan Penting: DO & DON'T (Guardrails untuk AI Agent)
+## 8. Aturan Penting: DO & DON'T (Guardrails untuk AI Agent)
 
 ### DO (Yang Harus Dilakukan)
-- **DO**: Pertahankan kompilasi **single-binary (`NismaraTracker.dll`)** dengan static runtime (`/MT`). Semua aset visual bawaan (seperti logo atau ikon) harus digambar secara prosedural dengan `ImDrawList` atau di-embed sebagai array byte C++ (seperti `include/ui/nismara_logo_data.hpp`).
-- **DO**: Pertahankan protokol **Gatekeeper Mutex `Global\NismaraCompanionRunning`**. Plugin in-game tidak boleh mengaktifkan overlay DX11 atau telemetri jika Companion App tidak sedang berjalan.
+- **DO**: Pertahankan arsitektur UI in-game **100% Native C++ Dear ImGui (`src/ui/tablet_gui.cpp`)** yang ringan dan cepat tanpa ketergantungan CEF Browser atau WebSocket streaming.
+- **DO**: Pertahankan kompilasi **single-binary (`NismaraTracker.dll` / `.so` / `.dylib`)** dengan static runtime (`/MT` pada MSVC). Semua aset visual bawaan (seperti logo atau ikon) harus digambar secara prosedural dengan `ImDrawList` atau di-embed sebagai array byte C++ (seperti `include/ui/nismara_logo_data.hpp`).
+- **DO**: Utamakan kompatibilitas **Cross-Platform (Windows, Linux Proton/Native, dan macOS)** serta skala **~300+ pengguna** dengan direktori yang berbeda-beda di setiap perubahan kode.
+- **DO**: Pertahankan protokol **Gatekeeper (`Global\NismaraCompanionRunning` + Cross-Platform Heartbeat)** sehingga plugin in-game hanya dapat membuka overlay jika Nismara Companion Desktop App sedang berjalan.
 - **DO**: Selalu gunakan komunikasi HTTP asynchronous di thread terpisah (`ApiClient`) untuk seluruh request jaringan dari C++. Jangan pernah melakukan jaringan sinkron di dalam thread DirectX `Present` atau callback SCS SDK.
 - **DO**: Pastikan setiap modifikasi UI di `src/ui/tablet_gui.cpp` tetap berada di dalam batas layar OLED iPhone 16 (`screen_min` hingga `screen_max`) dan sebelum pemanggilan `RenderPhoneBezelOverlay` agar tidak ada elemen visual yang bocor keluar dari bezel HP.
 - **DO**: Gunakan `String(user.discordId)` dan `guildId: "863959415702028318"` saat melakukan query ke koleksi `currencies` dan `points`, serta `ObjectId(user._id)` saat melakukan query ke koleksi `fleets` dan `garages`.
@@ -304,9 +351,12 @@ Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transpor
 - **DO**: Jika memperbarui aset logo dari file SVG, gunakan skrip rasterisasi supersampling (seperti yang menghasilkan `include/ui/nismara_logo_data.hpp`) agar kurva bezier dan `fill-rule="evenodd"` tetap tajam tanpa artefak.
 
 ### DON'T (Yang Dilarang Dilakukan)
-- **DON'T**: **Jangan pernah** mengarahkan polling telemetri atau pengiriman job langsung ke domain Vercel (`beta.nismara.web.id` / website utama) secara terus-menerus. Selalu gunakan `nismara-tracker-server` mandiri agar kuota serverless Vercel aman dari pembengkakan biaya (*overcost*).
-- **DON'T**: **Jangan pernah** mengubah `CMAKE_MSVC_RUNTIME_LIBRARY` menjadi `/MD` (Dynamic DLL), karena akan menyebabkan plugin gagal dimuat pada komputer driver yang belum menginstal VC++ Redistributable terbaru.
-- **DON'T**: **Jangan pernah** menghapus atau melewati pemeriksaan Mutex Gatekeeper di `dllmain.cpp` atau `scs_callbacks.cpp`.
+- **DON'T**: **Jangan pernah** menggunakan CEF Browser (`CefSharp`) atau WebSocket streaming untuk merender UI `tablet_gui`, karena akan membengkakkan ukuran instalasi ratusan megabyte dan menguras resource CPU/RAM pengguna.
+- **DON'T**: **Jangan pernah** meng-hardcode path direktori lokal developer (seperti `F:\SteamLibrary\...`) atau token personal developer (`NSM-...`) sebagai default di kode client maupun companion app.
+- **DON'T**: **Jangan pernah** menggunakan fallback `lastAuthenticatedUser` atau bypass autentikasi `isLocalRequest` di `nismara-tracker-server`, karena pada server produksi 24/7 yang melayani ~300 pengguna (terutama di balik reverse proxy), hal tersebut akan menyebabkan kebocoran/pencampuran sesi antar-driver.
+- **DON'T**: **Jangan pernah** mengarahkan polling telemetri atau pengiriman job langsung ke domain Vercel (`beta.nismara.web.id` / website utama) secara terus-menerus. Selalu gunakan `nismara-tracker-server` mandiri (24/7) agar kuota serverless Vercel aman dari pembengkakan biaya (*overcost*).
+- **DON'T**: **Jangan pernah** mengubah `CMAKE_MSVC_RUNTIME_LIBRARY` menjadi `/MD` (Dynamic DLL) pada build Windows, karena akan menyebabkan plugin gagal dimuat pada komputer driver yang belum menginstal VC++ Redistributable terbaru.
+- **DON'T**: **Jangan pernah** menghapus atau melewati pemeriksaan Gatekeeper di `wndproc_hook.cpp` atau `tablet_gui.cpp`.
 - **DON'T**: **Jangan pernah** melupakan pelepasan (`Release()`) `ID3D11RenderTargetView` di dalam hook `ResizeBuffers` (`src/hooks/dx11_hook.cpp`). Jika RTV tidak dilepas sebelum `ResizeBuffers` asli dipanggil, game ETS2/ATS akan langsung *crash* saat pengguna melakukan Alt-Tab atau mengubah resolusi layar.
 - **DON'T**: **Jangan pernah** menggunakan karakter non-ASCII / simbol Unicode eksotis yang tidak didukung oleh subset glyph default Dear ImGui (`Segoe UI` ASCII/Latin-1 range) di dalam string UI C++, karena akan tampil sebagai tanda tanya (`?`). Gunakan teks bersih atau ikon vektor `ImDrawList`.
 - **DON'T**: **Jangan pernah** mengandalkan pembacaan baris pertama hingga akhir pada `game.log.txt` untuk mendeteksi server multiplayer tanpa memprioritaskan modul DLL di memori (`haulmp_stub.dll` vs `core_ets2mp.dll`) dan urutan baris log paling bawah (*reverse scan*).
