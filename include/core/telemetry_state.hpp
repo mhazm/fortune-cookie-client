@@ -13,7 +13,8 @@ enum class AccountSyncStatus {
     Connecting,
     Authenticated,
     InvalidToken,
-    NetworkError
+    NetworkError,
+    VersionOutdated
 };
 
 /**
@@ -80,6 +81,8 @@ struct DriverAccountProfile {
     AccountSyncStatus status{AccountSyncStatus::Disconnected};
     std::string status_message{"Not connected. Enter your Tracker Token to sync."};
     std::string last_sync_timestamp{};
+    bool is_version_outdated{false};
+    std::string required_min_version{};
 
     // Core MongoDB User Identity
     std::string user_id{};

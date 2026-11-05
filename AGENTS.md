@@ -262,6 +262,26 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - Hal ini menghemat beban bandwidth server VPS secara drastis (di-hosting gratis dan berkecepatan tinggi oleh GitHub Global CDN) serta memudahkan 300+ driver menerima pembaruan instan.
    - Integritas biner pembaruan divalidasi dengan enkripsi Minisign (`pubkey` di `tauri.conf.json` dan `TAURI_SIGNING_PRIVATE_KEY` di GitHub Secrets).
 
+### Phase 9: Auto-Updater Otomatis, In-Game Version Gatekeeper & Sinkronisasi Biner DLL
+1. **Pemeriksaan Pembaruan Klien Desktop (`Nismara Companion`)**:
+   - Terintegrasi langsung dengan `@tauri-apps/plugin-updater` dan `@tauri-apps/plugin-process`.
+   - Setiap kali Nismara Companion dibuka, aplikasi secara otomatis memeriksa pembaruan via GitHub Releases (`latest.json`).
+   - Tersedia tombol manual `Periksa Pembaruan` di footer bar dan modal dialog interaktif dengan catatan rilis (changelog), progress bar download real-time, dan tombol `Unduh & Perbarui Sekarang` (auto-relaunch).
+2. **Deteksi & Auto-Sync Biner DLL In-Game (`NismaraTracker.dll`)**:
+   - Companion membandingkan ukuran dan timestamp biner `NismaraTracker.dll` di folder game (`plugins/`) dengan biner yang dibundel di dalam aplikasi.
+   - Jika biner di folder game usang (`plugin_outdated`), Companion menampilkan badge status dan tombol interaktif `Perbarui Plugin DLL` (Amber), serta secara otomatis menyinkronkannya saat startup selama game sedang tidak berjalan.
+3. **Penegakan Versi Minimum Server (Server-Side Version Gatekeeper)**:
+   - Server `nismara-tracker-server` memberlakukan variabel `MIN_TRACKER_VERSION` (default `"1.0.0"`).
+   - Middleware `authTracker.js` memeriksa header `X-Tracker-Version`. Jika versi klien lebih rendah dari versi minimum:
+     - Mengembalikan `HTTP 426 Upgrade Required` dengan kode error `"OUTDATED_VERSION"` dan panduan pembaruan.
+     - Tracking telemetri dan job dari klien usang ditolak dengan aman tanpa menyebabkan data korup.
+   - Endpoint publik `GET /api/tracker/version` disediakan untuk memverifikasi batas versi minimum dan URL rilis resmi.
+4. **Peringatan In-Game Overlay iPhone 16 (`tablet_gui.cpp`)**:
+   - Jika plugin mendeteksi penolakan `HTTP 426 / OUTDATED_VERSION` dari server:
+     - Layar iPhone 16 in-game menampilkan banner peringatan merah mencolok di bagian atas layar:
+       `! UPDATE DIPERLUKAN: Wajib v{min_ver} - Buka Nismara Companion`.
+     - Pengemudi langsung mengetahui bahwa mereka perlu membuka Companion untuk memperbarui aplikasi.
+
 ---
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)

@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { check, Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import {
   LayoutGrid,
   Newspaper,
@@ -17,6 +19,10 @@ import {
   FolderSync,
   FolderOpen,
   Save,
+  RefreshCw,
+  Sparkles,
+  ShieldAlert,
+  ArrowUpCircle,
 } from "lucide-react";
 
 interface GameInfo {
@@ -32,6 +38,7 @@ interface GameInfo {
   user_data_dir: string;
   config_path: string;
   is_running: boolean;
+  plugin_outdated: boolean;
 }
 
 interface SystemStatus {
@@ -101,6 +108,21 @@ export default function App() {
   } | null>(null);
   const [showAboutModal, setShowAboutModal] = useState(false);
 
+  // Auto-Updater & Version Enforcement State
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<{
+    downloaded: number;
+    total: number;
+  } | null>(null);
+  const [serverVersionAlert, setServerVersionAlert] = useState<{
+    minVersion: string;
+    latestVersion: string;
+    downloadUrl: string;
+  } | null>(null);
+
   // Settings & Dynamic Paths (No hardcoded developer tokens or drive paths!)
   const [serverUrl, setServerUrl] = useState(
     () => localStorage.getItem("nsm_api_url") || "http://localhost:3100",
@@ -144,7 +166,122 @@ export default function App() {
     }
   };
 
-  // Load saved config from Documents\<Game>\nismara_config.dat on initial startup
+  // Check Tauri Updater against GitHub Releases
+  const checkForUpdates = async (manual = false) => {
+    setUpdateChecking(true);
+    try {
+      const update = await check();
+      if (update?.available) {
+        setAvailableUpdate(update);
+        setShowUpdateModal(true);
+        if (manual) {
+          notify(`Pembaruan v${update.version} ditemukan!`);
+        }
+      } else {
+        setAvailableUpdate(null);
+        if (manual) {
+          notify("Nismara Companion sudah dalam versi terbaru (v1.0.0).");
+        }
+      }
+    } catch (err: any) {
+      console.warn("Tauri updater check error:", err);
+      if (manual) {
+        notify(`Pemeriksaan pembaruan: ${err?.message || err}`, true);
+      }
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
+  // Check backend server version requirements (/api/tracker/version)
+  const checkServerVersion = async (targetBaseUrl?: string) => {
+    const url = (targetBaseUrl || serverUrl).trim().replace(/\/+$/, "");
+    try {
+      const resp = await fetch(`${url}/api/tracker/version`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.success && data.minVersion) {
+          const parseVer = (v: string) =>
+            v.split(".").map((n) => parseInt(n, 10) || 0);
+          const [sMaj, sMin, sPat] = parseVer(data.minVersion);
+          const [cMaj, cMin, cPat] = parseVer("1.0.0");
+          const isOutdated =
+            cMaj < sMaj ||
+            (cMaj === sMaj && cMin < sMin) ||
+            (cMaj === sMaj && cMin === sMin && cPat < sPat);
+          if (isOutdated) {
+            setServerVersionAlert({
+              minVersion: data.minVersion,
+              latestVersion: data.latestVersion || data.minVersion,
+              downloadUrl:
+                data.downloadUrl ||
+                "https://github.com/mhazm/fortune-cookie-client/releases/latest",
+            });
+          } else {
+            setServerVersionAlert(null);
+          }
+        }
+      }
+    } catch {
+      // Backend might be offline during dev, ignore
+    }
+  };
+
+  // Auto-sync in-game DLLs to detected games
+  const handleAutoSyncPlugins = async (silent = false) => {
+    try {
+      const reports = await invoke<string[]>("auto_sync_plugins", {
+        customEts2Path: customEts2Path.trim() || null,
+        customAtsPath: customAtsPath.trim() || null,
+      });
+      if (reports && reports.length > 0) {
+        if (!silent) {
+          notify(reports.join(" | "));
+        }
+        refreshSystemStatus();
+      } else if (!silent) {
+        notify("Seluruh plugin game sudah dalam kondisi mutakhir.");
+      }
+    } catch (err: any) {
+      if (!silent) {
+        notify(`Auto-sync plugin: ${err}`, true);
+      }
+    }
+  };
+
+  // Download & Install App Update
+  const handleApplyUpdate = async () => {
+    if (!availableUpdate) return;
+    setUpdateDownloading(true);
+    try {
+      let downloaded = 0;
+      let total = 0;
+      await availableUpdate.downloadAndInstall((event) => {
+        switch (event.event) {
+          case "Started":
+            total = event.data.contentLength || 0;
+            setDownloadProgress({ downloaded: 0, total });
+            break;
+          case "Progress":
+            downloaded += event.data.chunkLength;
+            setDownloadProgress({ downloaded, total });
+            break;
+          case "Finished":
+            setDownloadProgress({ downloaded: total, total });
+            break;
+        }
+      });
+      notify("Pembaruan berhasil dipasang! Memulai ulang aplikasi...");
+      setTimeout(async () => {
+        await relaunch();
+      }, 1200);
+    } catch (err: any) {
+      notify(`Gagal mengunduh pembaruan: ${err?.message || err}`, true);
+      setUpdateDownloading(false);
+    }
+  };
+
+  // Load saved config & perform initial startup checks
   useEffect(() => {
     invoke<PluginConfigPayload>("get_plugin_config")
       .then((cfg) => {
@@ -158,11 +295,20 @@ export default function App() {
         if (cfg.api_base_url) {
           setServerUrl(cfg.api_base_url);
           localStorage.setItem("nsm_api_url", cfg.api_base_url);
+          checkServerVersion(cfg.api_base_url);
+        } else {
+          checkServerVersion();
         }
       })
       .catch((err) => {
         console.warn("Could not load initial plugin config:", err);
+        checkServerVersion();
       });
+
+    // Check for App Updates silently on launch
+    checkForUpdates(false);
+    // Auto-sync DLLs to games if games are closed
+    handleAutoSyncPlugins(true);
   }, []);
 
   useEffect(() => {
@@ -356,6 +502,31 @@ export default function App() {
 
       {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#080d16]">
+        {/* SERVER VERSION ALERT (GATEKEEPER) */}
+        {serverVersionAlert && (
+          <div className="bg-gradient-to-r from-rose-950 via-rose-900 to-rose-950 border-b border-rose-500/50 px-6 py-2.5 flex items-center justify-between text-xs text-rose-100 backdrop-blur-md z-40 shadow-lg shadow-rose-950/50">
+            <div className="flex items-center gap-2.5">
+              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 animate-pulse" />
+              <span>
+                <strong>VERSI KLIEN TIDAK SESUAI:</strong> Server Nismara
+                mewajibkan versi minimum{" "}
+                <strong>v{serverVersionAlert.minVersion}</strong>. Akses
+                telemetri & tracking in-game dibatasi hingga Anda memperbarui
+                Nismara Companion.
+              </span>
+            </div>
+            <a
+              href={serverVersionAlert.downloadUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-all shadow-md shrink-0 ml-4 cursor-pointer"
+            >
+              <span>Unduh Versi v{serverVersionAlert.latestVersion}</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+        )}
+
         {/* VIEW: GAMES (LAUNCHER HERO SPLIT) */}
         {activeTab === "games" && (
           <div className="flex-1 flex w-full h-[calc(100vh-42px)] relative">
@@ -407,11 +578,19 @@ export default function App() {
                     </div>
                   ) : ets2Game?.is_installed ? (
                     <div className="flex items-center gap-2 text-slate-300 font-medium">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          ets2Game.plugin_outdated
+                            ? "bg-amber-400 animate-pulse shadow-lg shadow-amber-400/50"
+                            : "bg-emerald-400"
+                        }`}
+                      />
                       <span>
-                        {ets2Game.plugin_installed
-                          ? "Siap Bermain"
-                          : "Plugin NismaraTracker belum terpasang"}
+                        {!ets2Game.plugin_installed
+                          ? "Plugin NismaraTracker belum terpasang"
+                          : ets2Game.plugin_outdated
+                            ? "Update Plugin Tersedia"
+                            : "Siap Bermain"}
                       </span>
                     </div>
                   ) : (
@@ -463,25 +642,42 @@ export default function App() {
                       </span>
                     </button>
                   ) : (
-                    <button
-                      onClick={() => handleLaunchGame("ets2")}
-                      disabled={loadingAction === "launch_ets2"}
-                      className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white font-bold text-sm shadow-xl shadow-sky-500/30 flex items-center gap-2 transition-all hover:scale-102 active:scale-98"
-                    >
-                      <span>
-                        {loadingAction === "launch_ets2"
-                          ? "Membuka..."
-                          : "Open ETS2"}
-                      </span>
-                      <span className="text-lg">➜</span>
-                    </button>
+                    <>
+                      <button
+                        onClick={() => handleLaunchGame("ets2")}
+                        disabled={loadingAction === "launch_ets2"}
+                        className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 to-sky-500 hover:from-blue-500 hover:to-sky-400 text-white font-bold text-sm shadow-xl shadow-sky-500/30 flex items-center gap-2 transition-all hover:scale-102 active:scale-98 cursor-pointer"
+                      >
+                        <span>
+                          {loadingAction === "launch_ets2"
+                            ? "Membuka..."
+                            : "Open ETS2"}
+                        </span>
+                        <span className="text-lg">➜</span>
+                      </button>
+                      {ets2Game.plugin_outdated && (
+                        <button
+                          onClick={() => handleInstallPlugin("ets2")}
+                          disabled={loadingAction === "install_ets2"}
+                          className="px-5 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm shadow-xl shadow-amber-500/25 flex items-center gap-2 transition-all hover:scale-102 active:scale-98 cursor-pointer"
+                          title="Perbarui file NismaraTracker.dll ke versi terbaru yang dibundel"
+                        >
+                          <ArrowUpCircle className="w-4 h-4" />
+                          <span>
+                            {loadingAction === "install_ets2"
+                              ? "Memperbarui..."
+                              : "Perbarui Plugin"}
+                          </span>
+                        </button>
+                      )}
+                    </>
                   )}
 
                   {ets2Game?.is_installed && ets2Game.plugin_installed && (
                     <button
                       onClick={() => handleInstallPlugin("ets2")}
-                      title="Perbarui / Verifikasi file NismaraTracker.dll di folder game"
-                      className="p-3.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all backdrop-blur-md"
+                      title="Sinkronkan / Verifikasi ulang file NismaraTracker.dll"
+                      className="p-3.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all backdrop-blur-md cursor-pointer"
                     >
                       <FolderSync className="w-4 h-4" />
                     </button>
@@ -538,11 +734,19 @@ export default function App() {
                     </div>
                   ) : atsGame?.is_installed ? (
                     <div className="flex items-center gap-2 text-slate-300 font-medium">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                      <span
+                        className={`w-2.5 h-2.5 rounded-full ${
+                          atsGame.plugin_outdated
+                            ? "bg-amber-400 animate-pulse shadow-lg shadow-amber-400/50"
+                            : "bg-emerald-400"
+                        }`}
+                      />
                       <span>
-                        {atsGame.plugin_installed
-                          ? "Ready to Play"
-                          : "Plugin NismaraTracker belum terpasang"}
+                        {!atsGame.plugin_installed
+                          ? "Plugin NismaraTracker belum terpasang"
+                          : atsGame.plugin_outdated
+                            ? "Update Plugin Tersedia"
+                            : "Ready to Play"}
                       </span>
                     </div>
                   ) : (
@@ -583,14 +787,38 @@ export default function App() {
                         <span>Pasang Plugin</span>
                       </button>
                     ) : (
-                      <button
-                        onClick={() => handleLaunchGame("ats")}
-                        disabled={loadingAction === "launch_ats"}
-                        className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 text-white font-bold text-sm shadow-xl shadow-red-500/25 flex items-center gap-2 transition-all hover:scale-102"
-                      >
-                        <span>Open ATS</span>
-                        <span className="text-lg">➜</span>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => handleLaunchGame("ats")}
+                          disabled={loadingAction === "launch_ats"}
+                          className="px-8 py-3.5 rounded-xl bg-gradient-to-r from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 text-white font-bold text-sm shadow-xl shadow-red-500/25 flex items-center gap-2 transition-all hover:scale-102 cursor-pointer"
+                        >
+                          <span>Open ATS</span>
+                          <span className="text-lg">➜</span>
+                        </button>
+                        {atsGame.plugin_outdated && (
+                          <button
+                            onClick={() => handleInstallPlugin("ats")}
+                            disabled={loadingAction === "install_ats"}
+                            className="px-5 py-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-bold text-sm shadow-xl shadow-amber-500/25 flex items-center gap-2 transition-all hover:scale-102 active:scale-98 cursor-pointer"
+                            title="Perbarui file NismaraTracker.dll ke versi terbaru yang dibundel"
+                          >
+                            <ArrowUpCircle className="w-4 h-4" />
+                            <span>
+                              {loadingAction === "install_ats"
+                                ? "Memperbarui..."
+                                : "Perbarui Plugin"}
+                            </span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleInstallPlugin("ats")}
+                          title="Sinkronkan / Verifikasi ulang file NismaraTracker.dll"
+                          className="p-3.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-300 hover:text-white transition-all backdrop-blur-md cursor-pointer"
+                        >
+                          <FolderSync className="w-4 h-4" />
+                        </button>
+                      </>
                     )
                   ) : (
                     <button
@@ -865,6 +1093,85 @@ export default function App() {
                   />
                 </div>
               </div>
+
+              {/* Plugin Sync & Version Verification Card */}
+              <div className="p-6 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <Sparkles className="w-5 h-5 text-sky-400" />
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
+                        Pembaruan & Sinkronisasi Plugin In-Game
+                      </h3>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Memastikan binary NismaraTracker.dll di folder Euro Truck
+                        Simulator 2 dan ATS selalu versi terbaru.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleAutoSyncPlugins(false)}
+                    className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-sky-500/20 transition-all cursor-pointer"
+                  >
+                    <FolderSync className="w-4 h-4" />
+                    <span>Sinkronkan Plugin ke Game</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-300">
+                        Euro Truck Simulator 2
+                      </span>
+                      <p className="text-[10px] text-slate-500 font-mono truncate max-w-[200px]">
+                        {ets2Game?.plugin_path || "Belum dipasang"}
+                      </p>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        !ets2Game?.plugin_installed
+                          ? "bg-slate-800 text-slate-400"
+                          : ets2Game.plugin_outdated
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                            : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                      }`}
+                    >
+                      {!ets2Game?.plugin_installed
+                        ? "Belum Pasang"
+                        : ets2Game.plugin_outdated
+                          ? "Update Tersedia"
+                          : "Up to Date ✓"}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold text-slate-300">
+                        American Truck Simulator
+                      </span>
+                      <p className="text-[10px] text-slate-500 font-mono truncate max-w-[200px]">
+                        {atsGame?.plugin_path || "Belum dipasang"}
+                      </p>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        !atsGame?.plugin_installed
+                          ? "bg-slate-800 text-slate-400"
+                          : atsGame.plugin_outdated
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                            : "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                      }`}
+                    >
+                      {!atsGame?.plugin_installed
+                        ? "Belum Pasang"
+                        : atsGame.plugin_outdated
+                          ? "Update Tersedia"
+                          : "Up to Date ✓"}
+                    </span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -885,16 +1192,147 @@ export default function App() {
             </span>
           </div>
 
-          {/* Right Info Link */}
-          <button
-            onClick={() => setShowAboutModal(true)}
-            className="flex items-center gap-1 hover:text-slate-200 transition-colors shrink-0 ml-4 cursor-pointer"
-          >
-            <span>About Nismara Companion</span>
-            <Info className="w-3.5 h-3.5" />
-          </button>
+          {/* Right Update Checker & Info */}
+          <div className="flex items-center gap-3 shrink-0 ml-4">
+            <button
+              onClick={() => checkForUpdates(true)}
+              disabled={updateChecking}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-700/80 text-sky-400 hover:text-sky-300 text-[11px] font-semibold border border-slate-700/60 transition-all cursor-pointer"
+              title="Periksa Pembaruan Nismara Companion & Plugin In-game"
+            >
+              <RefreshCw
+                className={`w-3 h-3 ${updateChecking ? "animate-spin text-sky-300" : ""}`}
+              />
+              <span>{updateChecking ? "Memeriksa..." : "Periksa Pembaruan"}</span>
+            </button>
+
+            {availableUpdate && (
+              <button
+                onClick={() => setShowUpdateModal(true)}
+                className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold animate-pulse cursor-pointer shadow-lg shadow-emerald-500/20"
+              >
+                <Sparkles className="w-3 h-3 text-emerald-400" />
+                <span>v{availableUpdate.version} Tersedia!</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowAboutModal(true)}
+              className="flex items-center gap-1 hover:text-slate-200 transition-colors cursor-pointer ml-1"
+            >
+              <span>About</span>
+              <Info className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </footer>
       </div>
+
+      {/* AUTO-UPDATER MODAL */}
+      {showUpdateModal && availableUpdate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md animate-in fade-in duration-150">
+          <div className="w-[480px] p-6 rounded-2xl bg-slate-900 border border-sky-500/50 shadow-2xl shadow-sky-950/60 text-slate-200 relative flex flex-col gap-4">
+            {!updateDownloading && (
+              <button
+                onClick={() => setShowUpdateModal(false)}
+                className="absolute top-4 right-4 p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white shadow-lg shadow-sky-500/30">
+                <Sparkles className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Pembaruan Versi Tersedia</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-black bg-sky-500 text-slate-950">
+                    NEW
+                  </span>
+                </h3>
+                <div className="flex items-center gap-2 text-xs mt-0.5">
+                  <span className="text-slate-400">Versi Saat Ini: v1.0.0</span>
+                  <span className="text-slate-500">➜</span>
+                  <span className="text-sky-300 font-bold">
+                    Versi Baru: v{availableUpdate.version}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+                Catatan Rilis (Changelog):
+              </span>
+              <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap font-sans">
+                {availableUpdate.body ||
+                  "Pembaruan kestabilan sistem, auto-sync telemetri, dan kompatibilitas server terbaru."}
+              </div>
+            </div>
+
+            {/* Download Progress Bar */}
+            {updateDownloading && downloadProgress && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-slate-300">
+                  <span>Mengunduh paket instalasi...</span>
+                  <span className="font-mono text-sky-400">
+                    {downloadProgress.total > 0
+                      ? `${Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)}%`
+                      : "Memulai..."}
+                  </span>
+                </div>
+                <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-all duration-150"
+                    style={{
+                      width: `${
+                        downloadProgress.total > 0
+                          ? Math.min(
+                              100,
+                              (downloadProgress.downloaded /
+                                downloadProgress.total) *
+                                100,
+                            )
+                          : 10
+                      }%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-3 pt-2">
+              {!updateDownloading && (
+                <button
+                  onClick={() => setShowUpdateModal(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 transition-colors"
+                >
+                  Nanti Saja
+                </button>
+              )}
+              <button
+                onClick={handleApplyUpdate}
+                disabled={updateDownloading}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-400 hover:to-blue-500 text-white font-bold text-xs shadow-lg shadow-sky-500/25 flex items-center gap-2 transition-all hover:scale-102 active:scale-98 disabled:opacity-50 cursor-pointer"
+              >
+                {updateDownloading ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Sedang Memasang & Memulai Ulang...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Unduh & Perbarui Sekarang</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ABOUT MODAL */}
       {showAboutModal && (

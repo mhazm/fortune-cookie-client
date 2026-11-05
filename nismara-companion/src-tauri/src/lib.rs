@@ -32,6 +32,7 @@ pub struct GameInfo {
     pub user_data_dir: String,
     pub config_path: String,
     pub is_running: bool,
+    pub plugin_outdated: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -481,6 +482,37 @@ fn probe_game_directory(candidate: &Path, app_name: &str, exe_stem: &str) -> Opt
     None
 }
 
+fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
+    let candidate_sources = [
+        PathBuf::from(format!("../bin/{}", binary_name)),
+        PathBuf::from(format!("bin/{}", binary_name)),
+        PathBuf::from(format!("../../bin/{}", binary_name)),
+        PathBuf::from(binary_name),
+        PathBuf::from(format!("resources/{}", binary_name)),
+        PathBuf::from(format!("../resources/{}", binary_name)),
+    ];
+
+    for cand in &candidate_sources {
+        if cand.exists() {
+            return Some(cand.clone());
+        }
+    }
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            let candidate1 = parent.join(binary_name);
+            let candidate2 = parent.join("resources").join(binary_name);
+            if candidate1.exists() {
+                return Some(candidate1);
+            } else if candidate2.exists() {
+                return Some(candidate2);
+            }
+        }
+    }
+
+    None
+}
+
 fn detect_games(
     libraries: &[PathBuf],
     custom_ets2_path: Option<&str>,
@@ -550,6 +582,24 @@ fn detect_games(
             false
         };
 
+        let binary_name = plugin_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("NismaraTracker.dll");
+
+        let mut plugin_outdated = false;
+        if plugin_found {
+            if let Some(src) = find_bundled_plugin_source(binary_name) {
+                if let (Ok(src_meta), Ok(dst_meta)) =
+                    (fs::metadata(&src), fs::metadata(&plugin_file))
+                {
+                    if src_meta.len() != dst_meta.len() {
+                        plugin_outdated = true;
+                    }
+                }
+            }
+        }
+
         result.push(GameInfo {
             id: id.to_string(),
             name: name.to_string(),
@@ -563,6 +613,7 @@ fn detect_games(
             user_data_dir: user_data_dir.to_string_lossy().to_string(),
             config_path: config_path.to_string_lossy().to_string(),
             is_running,
+            plugin_outdated,
         });
     }
 
@@ -814,38 +865,7 @@ async fn install_plugin(
             .and_then(|n| n.to_str())
             .unwrap_or("NismaraTracker.dll");
 
-        let candidate_sources = [
-            PathBuf::from(format!("../bin/{}", binary_name)),
-            PathBuf::from(format!("bin/{}", binary_name)),
-            PathBuf::from(format!("../../bin/{}", binary_name)),
-            PathBuf::from(binary_name),
-            PathBuf::from(format!("resources/{}", binary_name)),
-            PathBuf::from(format!("../resources/{}", binary_name)),
-        ];
-
-        let mut source_bin = None;
-        for cand in &candidate_sources {
-            if cand.exists() {
-                source_bin = Some(cand.clone());
-                break;
-            }
-        }
-
-        if source_bin.is_none() {
-            if let Ok(exe_path) = std::env::current_exe() {
-                if let Some(parent) = exe_path.parent() {
-                    let candidate1 = parent.join(binary_name);
-                    let candidate2 = parent.join("resources").join(binary_name);
-                    if candidate1.exists() {
-                        source_bin = Some(candidate1);
-                    } else if candidate2.exists() {
-                        source_bin = Some(candidate2);
-                    }
-                }
-            }
-        }
-
-        let src = source_bin.ok_or_else(|| {
+        let src = find_bundled_plugin_source(binary_name).ok_or_else(|| {
             format!(
                 "Source binary '{}' tidak ditemukan dalam paket companion.",
                 binary_name
@@ -876,6 +896,73 @@ async fn install_plugin(
     })
     .await
     .map_err(|e| format!("Install plugin error: {}", e))?
+}
+
+#[tauri::command]
+async fn auto_sync_plugins(
+    custom_ets2_path: Option<String>,
+    custom_ats_path: Option<String>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let steam_path_opt = get_steam_path();
+        let libraries = if let Some(ref sp) = steam_path_opt {
+            get_all_steam_library_folders(sp)
+        } else {
+            Vec::new()
+        };
+
+        let games = detect_games(
+            &libraries,
+            custom_ets2_path.as_deref(),
+            custom_ats_path.as_deref(),
+        );
+
+        let mut reports = Vec::new();
+
+        for game in games {
+            if !game.is_installed {
+                continue;
+            }
+
+            let binary_name = Path::new(&game.plugin_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("NismaraTracker.dll");
+
+            if let Some(src) = find_bundled_plugin_source(binary_name) {
+                if game.is_running {
+                    if game.plugin_outdated {
+                        reports.push(format!("{}: Game sedang berjalan (tutup game untuk memperbarui {}).", game.name, binary_name));
+                    }
+                    continue;
+                }
+
+                if !game.plugin_installed || game.plugin_outdated {
+                    let dest_dir = PathBuf::from(&game.plugin_dir);
+                    let dest_file = PathBuf::from(&game.plugin_path);
+                    if let Err(e) = fs::create_dir_all(&dest_dir) {
+                        reports.push(format!("{}: Gagal membuat folder plugins: {}", game.name, e));
+                        continue;
+                    }
+
+                    match fs::copy(&src, &dest_file) {
+                        Ok(_) => {
+                            let user_data_dir = PathBuf::from(&game.user_data_dir);
+                            migrate_legacy_plugin_files(&dest_dir, &user_data_dir);
+                            reports.push(format!("{}: Plugin {} otomatis diperbarui ke versi terbaru!", game.name, binary_name));
+                        }
+                        Err(e) => {
+                            reports.push(format!("{}: Gagal menyalin {}: {}", game.name, binary_name, e));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(reports)
+    })
+    .await
+    .map_err(|e| format!("Auto sync error: {}", e))?
 }
 
 #[tauri::command]
@@ -930,6 +1017,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             install_plugin,
+            auto_sync_plugins,
             launch_game,
             get_plugin_config,
             save_plugin_config

@@ -849,6 +849,18 @@ void TabletGui::Render() {
             RenderHomeIndicatorBar(draw_list, screen_min, screen_max, false);
         }
 
+        // Render mandatory version update alert banner if client is outdated
+        if (account.is_version_outdated) {
+            const ImVec2 alert_min(screen_min.x + 12.0f, screen_min.y + 36.0f);
+            const ImVec2 alert_max(screen_max.x - 12.0f, screen_min.y + 78.0f);
+            draw_list->AddRectFilled(alert_min, alert_max, IM_COL32(185, 28, 28, 240), 12.0f);
+            draw_list->AddRect(alert_min, alert_max, IM_COL32(239, 68, 68, 255), 12.0f, 0, 1.5f);
+
+            draw_list->AddText(font_semibold_, 13.0f, ImVec2(alert_min.x + 10.0f, alert_min.y + 4.0f), IM_COL32(255, 255, 255, 255), "! UPDATE DIPERLUKAN");
+            const std::string alert_sub = "Wajib v" + (account.required_min_version.empty() ? "terbaru" : account.required_min_version) + " - Buka Nismara Companion";
+            draw_list->AddText(font_small_, 11.0f, ImVec2(alert_min.x + 10.0f, alert_min.y + 21.0f), IM_COL32(254, 202, 202, 255), alert_sub.c_str());
+        }
+
         draw_list->PopClipRect();
 
         // 3. Render Hardware Bezel Ring & Titanium/Ultramarine Frame Overlay ON TOP OF the screen perimeter

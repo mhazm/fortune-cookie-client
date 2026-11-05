@@ -874,13 +874,26 @@ void ApiClient::ExecuteSyncWorker(
 
     const bool success = parsed.value("success", false);
     if (!success || status_code != 200 || !parsed.contains("driver") || !parsed["driver"].is_object()) {
+        const std::string err_code = parsed.value("errorCode", "");
+        const std::string min_ver = parsed.value("minVersion", "1.0.0");
         const std::string server_msg =
-            parsed.value("message", "Authentication failed (HTTP " + std::to_string(status_code) + ").");
-        TelemetryState::Instance().WriteDriverAccount([status_code, &server_msg](DriverAccountProfile& acc) {
-            acc.status = (status_code == 401 || status_code == 403)
-                             ? AccountSyncStatus::InvalidToken
-                             : AccountSyncStatus::NetworkError;
-            acc.status_message = server_msg;
+            parsed.value("error", parsed.value("message", "Authentication failed (HTTP " + std::to_string(status_code) + ")."));
+
+        TelemetryState::Instance().WriteDriverAccount([status_code, &server_msg, &err_code, &min_ver](DriverAccountProfile& acc) {
+            if (status_code == 426 || err_code == "OUTDATED_VERSION") {
+                acc.status = AccountSyncStatus::VersionOutdated;
+                acc.is_version_outdated = true;
+                acc.required_min_version = min_ver;
+                acc.status_message = "UPDATE DIPERLUKAN (v" + min_ver + "): Buka Nismara Companion untuk update.";
+            } else if (status_code == 401 || status_code == 403) {
+                acc.status = AccountSyncStatus::InvalidToken;
+                acc.is_version_outdated = false;
+                acc.status_message = server_msg;
+            } else {
+                acc.status = AccountSyncStatus::NetworkError;
+                acc.is_version_outdated = false;
+                acc.status_message = server_msg;
+            }
         });
         return;
     }
@@ -889,6 +902,7 @@ void ApiClient::ExecuteSyncWorker(
 
     TelemetryState::Instance().WriteDriverAccount([&drv](DriverAccountProfile& acc) {
         acc.status = AccountSyncStatus::Authenticated;
+        acc.is_version_outdated = false;
         acc.last_sync_timestamp = GetLocalTimeString();
         acc.status_message = "Synced at " + acc.last_sync_timestamp;
 
