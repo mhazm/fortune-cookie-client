@@ -8,14 +8,16 @@ Dokumen ini adalah panduan arsitektur, referensi teknis, histori implementasi, s
 
 Ekosistem **NismaraTracker** terdiri dari dua repositori/komponen utama yang saling terhubung:
 
-1. **Client Plugin (`NismaraTracker.dll`)**
+1. **Client Plugin & Companion App (`nismara-tracker` & `nismara-companion`)**
    - **Lokasi**: `d:\Project\Nismara Transport\Project\nismara-tracker`
-   - **Peran**: Native C++20 (`x64`) in-game telemetry & overlay plugin untuk **Euro Truck Simulator 2 (ETS2)** dan **American Truck Simulator (ATS)**.
-   - **Bentuk Distribusi**: **Single Standalone Binary (`bin/NismaraTracker.dll`)** tanpa ketergantungan DLL eksternal (menggunakan static MSVC runtime `/MT`).
+   - **Repository Git**: `https://github.com/mhazm/fortune-cookie-client.git`
+   - **Peran**: Native C++20 (`x64`) in-game telemetry & overlay plugin untuk **Euro Truck Simulator 2 (ETS2)** dan **American Truck Simulator (ATS)** serta desktop companion hub berbasis Tauri v2 + React.
+   - **Bentuk Distribusi**: **Single Standalone Binary (`bin/NismaraTracker.dll`)** tanpa ketergantungan DLL eksternal (menggunakan static MSVC runtime `/MT`) dan aplikasi desktop installer (`.msi` / `.exe`).
    - **Antarmuka**: In-game GUI berbentuk **iPhone 16 OS** (dimodelkan presisi dari `IPhone_16_Vector.svg` & `Nismara Group Logo.svg`) yang dirender langsung di dalam proses DirectX 11 game (toggle dengan tombol **`F11`**).
 
 2. **Dedicated Tracker Backend (`nismara-tracker-server`)**
    - **Lokasi**: `D:\Project\Nismara Transport\Project\nismara-tracker-server`
+   - **Repository Git**: `https://github.com/mhazm/fortune-cookie-server.git`
    - **Peran**: Server backend mandiri berbasis **Node.js + Express + Mongoose** yang menjembatani `NismaraTracker.dll` dengan database utama MongoDB (`nismara` database).
    - **Alasan Arsitektur**: Website utama Nismara Transport di-hosting di **Vercel** (serverless). Polling dan pengiriman telemetri/job dari plugin secara terus-menerus ke Vercel akan menguras kuota *Serverless Function Invocations* dan menyebabkan *overcost*. Oleh karena itu, seluruh komunikasi dari `NismaraTracker.dll` diarahkan ke `nismara-tracker-server` (berjalan di `http://localhost:3100` saat development atau VPS khusus saat production) dengan koneksi MongoDB pool yang persisten.
 
