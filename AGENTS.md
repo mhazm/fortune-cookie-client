@@ -56,14 +56,14 @@ Ekosistem **NismaraTracker** terdiri dari dua repositori/komponen utama yang sal
 ### A. `d:\Project\Nismara Transport\Project\nismara-tracker`
 ```text
 nismara-tracker/
-├── CMakeLists.txt                       # Konfigurasi build CMake (x64, C++20, /MT, single DLL)
+├── CMakeLists.txt                       # Konfigurasi build CMake (x64, C++20, /MT, MSVC /DELAYLOAD Ultralight)
 ├── Nismara Group Logo.svg               # Master vector logo Nismara Group (di-bake ke nismara_logo_data.hpp)
 ├── IPhone_16_Vector.svg                 # Master referensi geometri dan palet warna casing iPhone 16
 ├── include/
 │   ├── core/
 │   │   ├── telemetry_state.hpp          # Thread-safe singleton penyimpanan data telemetri, akun, fleet, garage, job
 │   │   ├── scs_callbacks.hpp            # Deklarasi callback SCS SDK (frame, channel, config, gameplay events)
-│   │   ├── config_manager.hpp           # Load/save konfigurasi lokal (Documents/<Game>/nismara_config.dat)
+│   │   ├── config_manager.hpp           # Load/save konfigurasi lokal & path resolver Companion runtime/web-ui
 │   │   ├── profile_validator.hpp        # Validasi 9 parameter cvars game & deteksi mod terlarang
 │   │   ├── api_client.hpp               # Async WinHTTP client (/me, /jobs/start, /jobs/complete, /jobs/cancel)
 │   │   └── server_detector.hpp          # Detektor server bermain (Singleplayer, SCS Convoy, TruckersMP, HaulMP)
@@ -71,30 +71,72 @@ nismara-tracker/
 │   │   ├── dx11_hook.hpp                # Hook IDXGISwapChain::Present & ResizeBuffers
 │   │   └── wndproc_hook.hpp             # Hook WndProc, Win32 Cursor APIs, & DirectInput8 mouse lock bypass
 │   └── ui/
-│       ├── tablet_gui.hpp               # State & renderer utama antarmuka iPhone 16 OS
+│       ├── web_surface_bridge.hpp       # Bridge engine Ultralight 2.0 WebKit, D3D11 surface, mouse input, & JS bridge
+│       ├── tablet_gui.hpp               # State & renderer frame hardware iPhone 16 OS (bezel, titanium, fallback)
 │       ├── texture_manager.hpp          # Manajemen tekstur DX11 untuk preset & custom wallpaper
 │       └── nismara_logo_data.hpp        # Data alpha mask 64x-supersampled (360x100) dari Nismara Group Logo.svg
 ├── src/
-│   ├── dllmain.cpp                      # Entry point DLL & ekspor scs_telemetry_init / scs_telemetry_shutdown
+│   ├── dllmain.cpp                      # Entry point DLL & registrasi SetDllDirectoryW ke folder runtime Companion
 │   ├── NismaraTracker.def               # Definisi simbol ekspor DLL untuk SCS SDK
 │   ├── core/
 │   │   ├── telemetry_state.cpp          # Implementasi thread-safe getter/setter TelemetryState
 │   │   ├── scs_callbacks.cpp            # Parser atribut SCS SDK, fleet matching, akumulasi damage, & job lifecycle
-│   │   ├── config_manager.cpp           # Parser & writer Documents/<Game>/nismara_config.dat + auto-create folder wallpapers/
+│   │   ├── config_manager.cpp           # Parser & writer config + resolver GetCompanionRuntimeDirectory/WebUIDirectory
 │   │   ├── profile_validator.cpp        # Parser file config.cfg & game.log.txt (cvars & forbidden mods scan)
 │   │   ├── api_client.cpp               # Worker thread WinHTTP & JSON parsing respons backend
 │   │   └── server_detector.cpp          # Logika deteksi modul DLL (core_ets2mp.dll, haulmp_stub.dll) & game.log.txt
 │   ├── hooks/
-│   │   ├── dx11_hook.cpp                # Dummy swapchain VTable discovery, RTV lifecycle, ImGui frame loop
+│   │   ├── dx11_hook.cpp                # Dummy swapchain discovery, DX11 Present loop, & WebSurfaceBridge texture update
 │   │   └── wndproc_hook.cpp             # F11 toggle, DirectInput8 VTable hook, & pembebasan kursor di dalam game
 │   └── ui/
+│       ├── web_surface_bridge.cpp       # Implementasi Ultralight WebKit runtime, D3D11 texture copy, & telemetry dispatcher
 │       ├── texture_manager.cpp          # Generator wallpaper procedural iOS 18 + Nismara Logo & WIC loader
-│       └── tablet_gui.cpp               # Seluruh UI iPhone 16 (Lock Screen, Home Screen, Dynamic Island, 6 Apps)
+│       └── tablet_gui.cpp               # Renderer frame iPhone 16, forwarding mouse ke WebSurfaceBridge, & ImGui fallback
+├── phone-ui/                            # Sub-project frontend React 19 + Tailwind CSS untuk iPhone 16 in-game OS
+│   ├── package.json                     # Scripts dev, build, & deploy:local
+│   ├── vite.config.ts                   # Base relative path './' untuk Ultralight file:/// loading
+│   ├── tsconfig.json                    # Konfigurasi TypeScript
+│   ├── index.html                       # Viewport iPhone 16 OLED (350x758) & container rounded 46px
+│   └── src/
+│       ├── main.tsx                     # Entry point React
+│       ├── App.tsx                      # Root component, screen switcher (lock, home, app), & theme background
+│       ├── index.css                    # Tailwind CSS v4 & iOS glassmorphism classes
+│       ├── types/telemetry.ts           # Definisi interface telemetri & aplikasi
+│       ├── hooks/useNismaraNative.ts    # Hook bridge JS nismara.on('telemetry') & mock browser simulator
+│       ├── components/ios/              # Komponen iOS (DynamicIsland.tsx, StatusBar.tsx, HomeIndicator.tsx)
+│       └── screens/                     # Layar aplikasi (LockScreen, HomeScreen, DispatchApp, NismaraIdApp, GarageApp, TelemetryApp, PenaltyApp, WallpapersApp, SettingsApp)
+├── nismara-companion/                   # Desktop Companion Hub berbasis Tauri v2 + React
+├── vendor/
+│   ├── ultralight/                      # Ultralight 2.0 WebKit C++ SDK (include/ & lib/)
+│   ├── minhook/                         # MinHook x64 API hook library
+│   ├── imgui/                           # Dear ImGui docking branch (DX11 + Win32 backend)
+│   └── json/                            # nlohmann/json single-header library
 └── bin/
-    └── NismaraTracker.dll               # Output akhir binary plugin siap pakai
+    └── NismaraTracker.dll               # Output akhir binary plugin standalone (1.44 MB) siap pakai
+
+### B. Folder Runtime Distribusi Komputer Pengguna (`%LOCALAPPDATA%\Nismara Companion\`)
+Seluruh dependensi runtime Ultralight, bundel Phone UI, dan berkas plugin `NismaraTracker.dll` dikelompokkan secara rapi di dalam subfolder **`resources/`** oleh installer resmi (NSIS/WiX) agar folder instalasi utama tetap bersih:
+```text
+%LOCALAPPDATA%\Nismara Companion/
+├── nismara-companion.exe                # Desktop Companion App (Tauri v2)
+├── uninstall.exe                        # Uninstaller aplikasi
+└── resources/                           # Seluruh dependensi runtime & plugin bundle
+    ├── NismaraTracker.dll               # Binary plugin native untuk disalin ke ETS2/ATS (~1.5 MB)
+    ├── runtime/                         # Engine Ultralight 2.0 WebKit (~35 MB)
+    │   ├── Ultralight.dll
+    │   ├── UltralightCore.dll
+    │   ├── WebCore.dll
+    │   ├── AppCore.dll
+    │   ├── icudt67l.dat
+    │   └── cacert.pem
+    └── web-ui/                          # Bundle React 19 + Tailwind CSS Phone UI (~380 KB)
+        ├── index.html
+        └── assets/
+            ├── index-*.js
+            └── index-*.css
 ```
 
-### B. `D:\Project\Nismara Transport\Project\nismara-tracker-server`
+### C. `D:\Project\Nismara Transport\Project\nismara-tracker-server`
 ```text
 nismara-tracker-server/
 ├── server.js                            # Entry point Express server (Port 3100) & koneksi MongoDB
@@ -116,7 +158,11 @@ nismara-tracker-server/
     │   └── Transaction.js               # Koleksi `transactions` (pencatatan mutasi pendapatan job NC)
     ├── routes/
     │   ├── me.routes.js                 # GET & POST /api/tracker/me (sinkronisasi profil, wallet, fleet, garage, ongoingJob)
-    │   └── jobs.routes.js               # POST /api/tracker/jobs/start, /complete, /cancel
+    │   ├── jobs.routes.js               # POST /api/tracker/jobs/start, /complete, /cancel
+    │   ├── points.routes.js             # POST /api/tracker/points/pay & /use-ticket
+    │   ├── events.routes.js             # GET /api/tracker/events (contracts, coupons, giveaways, ncevents)
+    │   ├── news.routes.js               # GET /api/tracker/news (proxy Sanity CMS Viewer API menggunakan SANITY_TOKEN)
+    │   └── updater.routes.js            # GET /api/tracker/version & /update.json
     └── services/
         └── jobProcessor.js              # Kalkulasi finansial job, cap +25% plannedDistanceKm, update wallet/exp/fleet
 ```
@@ -137,16 +183,36 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - Field `totalPoints` di koleksi `points` mencatat **poin penalti pelanggaran driver** (skala 0–50).
    - Nilai ideal adalah **0** (Aman). Status: `<10` Aman (Hijau), `10-24` Penalty 1 (Kuning), `25-49` Penalty 2 (Oranye), `≥50` Penalty 3 (Merah).
    - Jangan pernah menganggap `totalPoints` sebagai skor prestasi atau men-default nilainya ke 100!
-3. **Koleksi `garages` (`safeboxStock` = TIKET HAPUS PENALTI)**:
+3. **Koleksi `garages` (`safeboxStock`, Level Fasilitas, & Rincian Biaya Operasional NC)**:
    - Field `safeboxStock` di koleksi `garages` adalah **jumlah tiket hapus penalti**, BUKAN saldo uang/NC.
    - Kapasitas maksimal tiket: $\text{Max Tickets} = 10 + (\text{safeboxLevel} - 1) \times 5$.
    - Rasio penggunaan: **1 Tiket Safebox = 1 Poin Penalti Dihapus**.
-4. **Koleksi `currencies` & Aturan Diskon Kumulatif**:
+   - **Level Fasilitas & Biaya Operasional (dalam NC / Nismara Coin)**:
+     - `fleetSlotLevel`: Level kapasitas slot armada (mulai dari `1`).
+     - `fuelTankLevel`: Level kapasitas tangki solar ($\text{fuelTankLevel} = \max(1, \frac{\text{fuelCapacity} - 1000}{1000})$).
+     - `safeboxLevel`: Level kapasitas brankas safebox (mulai dari `1`).
+     - `operational_cost`: Total biaya operasional garasi dalam NC (`fleet_operational_cost + fuel_operational_cost + safebox_operational_cost`) beserta tanggal jatuh tempo `next_payment_date`.
+     - `fleet_operational_cost`: Biaya operasional slot armada ($\sum_{i=2}^{\text{fleetSlotLevel}} [250 + \lfloor\frac{i-1}{3}\rfloor \times 250]$ NC).
+     - `fuel_operational_cost`: Biaya operasional tangki solar ($\sum_{i=2}^{\text{fuelTankLevel}} [200 + \lfloor\frac{i-1}{5}\rfloor \times 100]$ NC).
+     - `safebox_operational_cost`: Biaya operasional brankas safebox ($\sum_{i=2}^{\text{safeboxLevel}} [250 + \lfloor\frac{i-2}{3}\rfloor \times 150]$ NC).
+4. **Koleksi `fleets` (`wear.unfix_*`, `maintenance.*`, `status`, & Jadwal Servis — KRITIS!)**:
+   - **`wear.unfix_engine`, `wear.unfix_transmission`, `wear.unfix_brakes`, `wear.unfix_tires`**:
+     - Nilai di database MongoDB **SUDAH dalam skala persentase `0–100` (contoh: `2.8427` berarti `2.84%`)**, BUKAN skala pecahan `0.0–1.0`!
+     - **JANGAN PERNAH** mengalikan `unfix_*` dengan `100` di frontend/UI karena akan menyebabkan `2.84%` tampil salah menjadi `284.3%`.
+   - **`maintenance.engine` (`50000`), `maintenance.tires` (`20000`), `maintenance.transmission` (`70000`), `maintenance.brakes` (`35000`)**:
+     - Angka ini adalah **Target Odometer Servis Berkala Berikutnya (dalam KM)** — artinya saat odometer truk mencapai angka tersebut (misal odometer menyentuh `20.000 km`), truk wajib melakukan servis komponen terkait ($\text{Sisa Jarak Servis} = \text{maintenance.target} - \text{odometer}$).
+     - **JANGAN PERNAH** mengartikan field `maintenance.*` sebagai "jarak tempuh sejak servis terakhir". Untuk titik odometer saat terakhir kali diservis, gunakan `last_maintenance.{engine,tires,transmission,brakes}`.
+   - **`status`, `maintenance_needed`, `maintenance_start_date`, `maintenance_end_date`**:
+     - `status`: Memiliki enum `["active", "inactive", "onservice", "need_maintenance"]` (lihat model `Fleet.ts`).
+     - `maintenance_needed` (`boolean`): Menandakan apakah unit truk sudah harus melakukan servis berkala.
+     - `maintenance_start_date` & `maintenance_end_date` (`Date | null`): Waktu mulai servis dan estimasi selesai servis armada.
+     - `customName` & `customImage`: Nama julukan kustom dan foto kustom armada.
+5. **Koleksi `currencies` & Aturan Diskon Kumulatif**:
    - Field saldo utama di database bernama **`totalNC`** (perhatikan huruf besar `NC`).
    - Endpoint `/api/tracker/me` mengembalikan keduanya (`totalNC` dan `totalNc`) di JSON.
    - Biaya tebus penalti via NC: Base `pointPrice = 3000 NC` (dari `guildsettings`).
    - **Diskon Kumulatif**: Server Booster (-500 NC) + Nismara+ Aktif (-500 NC). Jika driver memiliki keduanya, diskon menjadi **-1,000 NC** (biaya tebus menjadi 2,000 NC/poin).
-5. **Koleksi `jobhistories` (Pencatatan Job dari Plugin)**:
+6. **Koleksi `jobhistories` (Pencatatan Job dari Plugin)**:
    - **`provider`**: Selalu bernilai `"nismara"` (untuk membedakan dari job legacy `"trucky"`).
    - **`jobId`**: String angka sekuensial auto-increment mulai dari `"1"`, `"2"`, `"3"`, dst. Dihasilkan oleh fungsi `getNextSequentialJobId()` di `src/routes/jobs.routes.js` yang mencari nilai numerik tertinggi pada dokumen `jobhistories` dengan `provider: "nismara"`.
    - **`status`**: `"ONGOING"` saat job dimulai (`job_started`), lalu berubah menjadi `"COMPLETED"` (`job_delivered`) atau `"CANCELED"` (`job_cancelled`).
@@ -377,7 +443,118 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    - String `status_message` pada `ApiClient` dibersihkan dari pemaparan raw IP (`Menyinkronkan dengan Nismara Cloud...`).
    - Binary standalone `NismaraTracker.dll` di bundle `resources/` diperbarui dengan build release terbaru.
 
----
+### Phase 11: Ultralight 2.0 WebKit Engine & In-Game iPhone 16 OS via React 19 + Tailwind CSS
+1. **Latar Belakang & Masalah CEF vs Ultralight**:
+   - Upaya merender UI web in-game menggunakan CEF (Chromium Embedded Framework) memicu pembengkakan ukuran binary hingga ~400 MB yang melanggar batas distribusi ringan Nismara.
+   - Diadopsi engine **Ultralight 2.0 (WebKit + JavaScriptCore fork)** yang dirancang khusus untuk game C++ / DirectX 11.
+   - Ukuran redistributable terpangkas drastis menjadi **~35 MB uncompressed (hanya ~25 MB terkompresi 7z)**, namun tetap mendukung 100% kapabilitas React 19, Tailwind CSS v4, Lucide SVG icons, dan animasi CSS halus.
+2. **Zero-Clutter Game Folder via MSVC `/DELAYLOAD`**:
+   - Folder instalasi game `bin/win_x64/plugins/` **hanya berisi 1 file tunggal: `NismaraTracker.dll` (1.4 MB)**.
+   - Seluruh DLL engine (`Ultralight.dll`, `UltralightCore.dll`, `WebCore.dll`, `AppCore.dll`) dan aset WebKit (`icudt67l.dat`, `cacert.pem`) disimpan terpusat di folder Companion: `%LOCALAPPDATA%\Nismara Companion\runtime\`.
+   - Di `src/dllmain.cpp` (`DLL_PROCESS_ATTACH`), plugin mendaftarkan direktori tersebut ke Windows DLL search path melalui `SetDllDirectoryW`.
+3. **Arsitektur Rendering & Input Forwarding (`WebSurfaceBridge`)**:
+   - `WebSurfaceBridge` mengelola instance Ultralight `Renderer` dan `View` beresolusi native OLED iPhone 16 (`350 x 758 px`) dengan mode transparan.
+   - Buffer bitmap Ultralight di-upload secara langsung ke `ID3D11Texture2D` berformat `DXGI_FORMAT_B8G8R8A8_UNORM` dan dirender ke layar melalui `draw_list->AddImageRounded(..., 46.0f)` di dalam bezel iPhone 16 ImGui.
+   - Event mouse (gerakan kursor, klik kiri/kanan, dan mouse wheel) diterjemahkan dari koordinat game ke koordinat lokal layar `[0..350] x [0..758]` dan diteruskan ke `view->FireMouseEvent()` & `FireScrollEvent()`.
+4. **Bidirectional JavaScript Bridge & Telemetry Streaming**:
+   - Menggunakan `js::API` Ultralight: C++ mengekspos event `nismara.on('telemetry', (json) => ...)` yang mem-push live speed, gear, RPM, bahan bakar, muatan kargo, rute, keausan komponen, dan saldo NC.
+   - JavaScript mengekspos fungsi kontrol native: `nismara.lockPhone()`, `nismara.unlockPhone()`, `nismara.closePhone()`, dan `nismara.openApp()`.
+5. **Project Frontend Mandiri (`phone-ui/`)**:
+   - Dibangun dengan Vite + React 19 + TypeScript + Tailwind CSS v4.
+   - Mengadopsi prinsip UI/UX dari skill global `ui-ux-pro-max`, `sleek-design-mobile-apps`, dan `no-ai-slop`.
+   - **7 Aplikasi dengan Kepribadian Unik**:
+     - *Lock Screen*: Jam raksasa iOS 18, Dynamic Island aktif, 3 lockscreen widgets, dan live route card.
+     - *Home Screen*: Smart Driver Widget, 8 app icons (touch targets min 56x56 px), dan frosted glass dock.
+     - *Waybill & Dispatch*: Layout nota kargo logistik industrial, manifest muatan, timeline rute origin-destination, dan slip paycheck digital.
+     - *Nismara ID*: Desain Apple Wallet holographic member pass dengan barcode dan badge rank.
+     - *My Garage*: Showroom armada aktif, aus 5 komponen fisik, dan countdown kilometer servis berkala.
+     - *Cockpit Cluster*: Digital speedometer tajam, multi-band RPM bar (Eco, Power, Redline), dan telltale indicators.
+     - *Penalty Compliance*: Gauge penalti 0-50 poin, stepper tebus NC diskon kumulatif, dan penggunaan tiket Safebox.
+     - *Themes & Settings*: 5 Preset tema iOS 18 (Ultramarine, Midnight, Cyberpunk, Executive, Sunset) dan tabel konfigurasi inset grouped.
+6. **Automatic Graceful Fallback**:
+   - Jika runtime Ultralight atau folder `web-ui` belum terinstal, `tablet_gui.cpp` secara otomatis beralih ke rendering Dear ImGui native tanpa pernah menyebabkan game crash.
+7. **Pencegahan Deadlock / Freeze saat Exit Game (OS Loader Lock Safety)**:
+   - Shutdown graceful (`Dx11Hook::Shutdown()`, `ApiClient::Shutdown()`) dipindahkan ke `scs_telemetry_shutdown()` yang dieksekusi oleh engine game saat telemetry session berakhir.
+   - Di `src/dllmain.cpp` (`DLL_PROCESS_DETACH`), jika `lpReserved != nullptr` (tanda proses sedang dimatikan secara instan oleh OS), DLL dilarang keras melakukan thread synchronization / `.join()` atau panggilan DirectX/COM untuk mencegah freeze/deadlock di bawah Windows Loader Lock.
+8. **Aturan CSS Engine Compatibility pada Ultralight WebKit**:
+   - Engine WebKit pada Ultralight 2.0 (branch 615) tidak memproses selector kelas Tailwind dengan kurung siku escaped (`\[...\]` seperti `.pt-[68px]`, `.text-[68px]`, `.rounded-[26px]`).
+   - Seluruh layout viewport, padding safe area atas/bawah, elevasi dock, dan ukuran jam wajib menggunakan **inline styles React (`style={{ ... }}`)** atau CSS murni tanpa arbitrary bracket selector agar rendering konsisten 100% dan tidak pernah melorot/menumpuk.
+9. **Penegakan Gatekeeper Sesi Kabin Aktif (Anti-Crash Menu / Loading / Pause)**:
+   - F11 dan rendering overlay iPhone 16 **hanya diizinkan ketika driver sedang berada di dalam kabin truk aktif** (`TelemetryState::IsInCabinDrivingSession()`).
+   - Di ETS2/ATS, menu utama memiliki *3D desktop showroom* di latar belakang yang memuat model truk (`Desktop screen config switched to 'truck'`). Untuk membedakan kabin berkendara nyata dari menu utama/showroom, plugin mendaftarkan event callback `SCS_TELEMETRY_EVENT_frame_start` untuk memonitor `paused_simulation_time`.
+   - Driver dianggap berada di dalam sesi kabin berkendara (`is_driving_in_world`) jika dan hanya jika:
+     1. Simulasi fisik aktif berdetak (`paused_simulation_time` terus bertambah, tidak beku).
+     2. Status `is_paused == false`.
+     3. Model truk terpasang (`truck_in_game_id` tidak kosong).
+     4. Waktu in-game berjalan (`game_time_minutes > 0`).
+     5. Koordinat posisi truk di dunia valid (`abs(pos_x) > 1.0` atau `abs(pos_z) > 1.0`).
+   - Di Main Menu, Loading Screen, atau saat game di-pause (Esc), penekanan tombol F11 otomatis diblokir total (`return 0`).
+   - Jika game memasuki status pause atau memuat game baru (`OnTelemetryPause` / `SCS_TELEMETRY_EVENT_paused`), overlay HP otomatis tertutup seketika untuk mencegah *swapchain pipeline conflict* dan crash DirectX saat game memuat save.
+10. **Optimasi Alokasi Memori Ultralight & Zero Backbuffer Lock**:
+    - Default Ultralight mengalokasikan 256 MB cache dan memicu hingga 16 worker thread yang berisiko memicu *E_OUTOFMEMORY (0x8007000E)* saat ETS2 memuat tekstur dunia (misal 2048x2048 shadow maps).
+    - Dikonfigurasi ultra-ringan: `memory_cache_size = 32 MB`, `num_renderer_threads = 1`, `max_heap_size = 64 MB`, dan `idle_gc_enabled = true`.
+    - `main_rtv_` (DX11 RenderTargetView) HANYA dibuat saat HP dalam keadaan terlihat (`tablet_visible == true`). Saat HP tertutup, `main_rtv_` segera dilepas (`CleanupRenderTarget()`) sehingga plugin tidak pernah menahan referensi ke swapchain backbuffer saat game memuat save atau berpindah adegan.
+
+### Phase 15: Penyempurnaan Companion Phone (Nismara OS), Alur Data SCS SDK, Filter Game Armada, & Stabilitas Input/Scroll (WAJIB DIPAHAMI OLEH SEMUA MODEL AI!)
+Bagian ini merangkum arsitektur final yang sudah 100% stabil agar model AI mana pun (termasuk Gemini Flash / Pro / Claude) **TIDAK melakukan improvisasi liar atau merusak sistem yang sudah berjalan**:
+
+1. **Identitas & Penamaan Resmi (`Companion Phone` & `Nismara OS`)**:
+   - Seluruh teks antarmuka pengguna di `phone-ui/` maupun `tablet_gui.cpp` **WAJIB** menggunakan nama perangkat **"Companion Phone"** dan sistem operasi **"Nismara OS"** (contoh: `Nismara OS v1.0.1`, `Build 1.0.1-x64`).
+   - **DILARANG** menampilkan teks `"iPhone 16"` atau `"iOS 18"` di layar pengguna.
+   - Versi plugin dan OS dikirim secara dinamis dari macro CMake `NISMARA_VERSION` (`CMakeLists.txt` $\rightarrow$ `src/ui/web_surface_bridge.cpp`), bukan di-hardcode manual.
+
+2. **Sumber Data Truk & Transmisi (100% SCS Telemetry SDK, BUKAN `game.log.txt`!)**:
+   - **Identitas Truk In-Game**: Diambil murni dari callback SCS Telemetry SDK `OnTelemetryConfiguration` (`info->id == "truck"`) di [`src/core/scs_callbacks.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/scs_callbacks.cpp) (`brand_id`, `brand`, `id`, `name`, `license_plate`), yang kemudian langsung memanggil `TelemetryState::Get().MatchActiveFleet()`. **JANGAN PERNAH** mencoba membaca merek/model truk dari `game.log.txt`!
+   - **Gigi Transmisi (`gear_text`)**: Diambil dari channel SCS SDK `SCS_TELEMETRY_TRUCK_CHANNEL_displayed_gear` (`gear.displayed`) dan `selected_gear` (`gear.selected`), lalu diformat oleh `FormatTruckGearString()` di `scs_callbacks.cpp` menjadi `D1..D12`, `N`, `R1..`, atau `1L..8H` dan dikirim ke React melalui field JSON `gear_text`.
+   - **Pencocokan Armada (`MatchActiveFleet`) vs Truk Sewa (Quick Job)**:
+     - `TelemetryState::MatchActiveFleet()` mencocokkan `truck_in_game_id` / `brand` / `model` yang sedang dikendarai dengan daftar `fleets` milik user dari database.
+     - Jika cocok (`has_matched_fleet == true`), maka nomor lambung (`fleet_number`, misal `NL-074`) ditampilkan.
+     - Jika **TIDAK cocok** (`has_matched_fleet == false`), berarti user sedang memakai **Truk Sewa (Quick Job) atau truk yang belum terdaftar di garasi**. Dalam kondisi ini, `fleet_number` **HARUS KOSONG (`""`)** dan UI menampilkan `SEWA` / `TRUK SEWA` / `[UNREGISTERED]`. **DILARANG KERAS** memaksa atau meng-hardcode `fleet_number` milik user ketika `has_matched_fleet == false`!
+
+3. **Filter Armada Berdasarkan Game Aktif (`ETS2` vs `ATS`)**:
+   - Di database MongoDB, field `game_id` pada dokumen koleksi `fleets` sering bernilai default `"1"`, sedangkan identitas game sebenarnya tersimpan di dokumen `fleetstores` hasil `$lookup` (`f.modelInfo.game_id`: `1` = ETS2, `2` = ATS).
+   - Di backend [`src/routes/me.routes.js`](file:///D:/Project/Nismara%20Transport/Project/nismara-tracker-server/src/routes/me.routes.js), mapping `gameId` pada `fleets` wajib menggunakan `String(f.modelInfo?.game_id ?? f.game_id ?? "1")`.
+   - Di sisi client C++ (`telemetry_state.cpp` & `web_surface_bridge.cpp`) dan React (`GarageApp.tsx`), daftar armada difilter berdasarkan game yang sedang berjalan (`IsFleetMatchingGame` / `isFleetForCurrentGame`). Saat bermain **ETS2**, hanya armada ETS2 yang ditampilkan dan dicocokkan; saat bermain **ATS**, hanya armada ATS yang ditampilkan dan dicocokkan.
+
+4. **Skema JSON `/api/tracker/me` (Nested Schema & Ketahanan Data)**:
+   - Endpoint `GET/POST /api/tracker/me` mengembalikan struktur JSON bersarang di bawah `data`:
+     - `data.driver` (`name`, `discordId`, `steamId`, `image`, `banner`, `rank`, `role`, `joinedConvoy`)
+     - `data.wallet` (`totalNC`, `totalNc`)
+     - `data.level` (`level`, `exp`, `totalExp`)
+     - `data.penalty` (`totalPoints`, `pointPrice`, `discountBooster`, `discountNismaraPlus`, `totalDiscount`, `finalPointPrice`, `safeboxTickets`, `maxPenaltyTickets`)
+     - `data.garage` (`hasGarage`, `fuelStock`, `fuelCapacity`, `fuelLevel`, `fleetSlot`, `fleetSlotUsed`, `safeboxStock`, `safeboxLevel`)
+     - `data.fleets` (array armada) & `data.perks` (`nismaraPlus`, `isBooster`, `insurance`, `ncBoost`, `topManager`)
+   - Fungsi `ParseDriverAccountJson` di [`src/core/api_client.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/api_client.cpp) wajib mem-parsing struktur bersarang tersebut (dengan fallback ke key flat).
+   - Apabila request HTTP `/api/tracker/me` mengalami kegagalan jaringan sementara (timeout / koneksi terputus sesaat), **JANGAN PERNAH** menimpa `TelemetryState` dengan `DriverAccountData` kosong yang menghapus daftar `fleets` dan `garage` yang sudah berhasil dimuat sebelumnya!
+
+5. **Aturan Hook DirectInput8 (Anti-Crash Saat Colok Joystick / Steering Wheel)**:
+   - Di [`src/hooks/wndproc_hook.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/hooks/wndproc_hook.cpp), **DILARANG KERAS** memasang hook pada `IDirectInput8W::CreateDevice` (VTable index `3`).
+   - **Alasan**: Saat pemain mencolokkan perangkat Joystick, Steering Wheel, atau Gamepad USB di tengah permainan, engine ETS2/ATS memanggil `CreateDevice` untuk `DI8DEVCLASS_GAMECTRL`. Mencegat VTable `CreateDevice` akan merusak inisialisasi perangkat kontroler dan menyebabkan game langsung *crash* (*Access Violation*).
+   - **Cara yang Benar**: Buat dummy device `GUID_SysMouse` satu kali saat inisialisasi hook, lalu hanya pasang hook pada `GetDeviceState` (VTable index `9`) dan `GetDeviceData` (VTable index `10`). Di dalam hook tersebut, periksa `IsMouseDevice(this)` dan hanya blokir pergerakan kamera ketika layar HP sedang terbuka (`IsTabletVisible() == true`).
+
+6. **Aturan Vertical Scrolling pada Ultralight WebKit (`phone-ui/`)**:
+   - **Masalah Klasik Flexbox + Overflow**: Jika sebuah `<div>` memiliki `overflow-y: auto` sekaligus `display: flex; flex-direction: column`, engine WebKit akan menyusutkan tinggi kartu-kartu di dalamnya (`flex-shrink: 1`) agar muat di dalam tinggi layar, sehingga kartu tampak gepeng/terpotong dan `scrollHeight === clientHeight` (tidak bisa di-scroll ke bawah).
+   - **Pola Wajib (`.scroll-area`)**:
+     Seluruh halaman aplikasi di `phone-ui/src/screens/*.tsx` wajib memisahkan kontainer scroll (block) dan kontainer flex di dalamnya:
+     ```tsx
+     <div data-scroll-container="true" className="scroll-area">
+       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingBottom: 24 }}>
+         {/* Kartu-kartu konten di sini */}
+       </div>
+     </div>
+     ```
+   - Selain `view->FireScrollEvent()`, `WebSurfaceBridge::FireMouseScroll` memancarkan event JS `nismara.on('scroll', ({ x, y, delta_y }) => ...)` yang ditangkap di [`useNismaraNative.ts`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/phone-ui/src/hooks/useNismaraNative.ts) untuk menggerakkan `el.scrollTop -= delta_y` secara presisi pada elemen `[data-scroll-container="true"]`.
+
+7. **Siklus Buka/Tutup HP (`overlay_open_seq`), Dynamic Island, & Idle Throttling**:
+   - Saat layar Companion Phone ditutup (`F11`), `WebSurfaceBridge` melakukan *idle throttling* (tidak me-render ulang frame WebKit setiap siklus DX11 `Present`), sehingga penggunaan CPU/GPU in-game saat HP tertutup adalah ~0%. *(Catatan: Proses `WebView2 Manager` di Task Manager Windows adalah milik aplikasi desktop **Nismara Companion (Tauri)**, bukan proses di dalam game).*
+   - Setiap kali HP dibuka/ditutup dengan `F11`, counter `overlay_open_seq` bertambah. `DynamicIsland.tsx` mendengarkan perubahan `overlay_open_seq` dan `activeScreen` agar otomatis kembali menutup (*collapse* ke bentuk pill kecil) setiap kali pengguna berpindah aplikasi atau menutup HP.
+   - Ukuran `DynamicIsland`: Saat tertutup (*collapsed*) berbentuk pill ringkas (`172x26 px`) yang hanya menampilkan status lambung/sewa serta kecepatan & gigi. Saat diklik (*expanded*) membuka kartu detail (`318x92 px`).
+
+8. **Aturan Gatekeeper Pencatatan Job (`IsCompanionAppRunning()`) vs Layar HP In-Game (`F11`)**:
+   - **Aplikasi Desktop `Nismara Companion` (`nismara-companion.exe`) WAJIB Terbuka**:
+     Di [`src/core/scs_callbacks.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/scs_callbacks.cpp) (`OnTelemetryGameplayEvent` untuk `job_started`, `job_delivered`, `job_cancelled`), plugin **WAJIB** memeriksa `nismara::core::IsCompanionAppRunning()`.
+     - Jika aplikasi desktop **`Nismara Companion` TIDAK dibuka** oleh pemain: **pekerjaan TIDAK BOLEH dicatat ke database** (request `/jobs/start`, `/jobs/complete`, `/jobs/cancel` diblokir). **JANGAN PERNAH menghapus pemeriksaan `IsCompanionAppRunning()` ini!**
+     - Jika aplikasi desktop **`Nismara Companion` SEDANG terbuka** (baik di layar maupun berjalan di background/system tray): **pekerjaan TETAP DICATAT 100% OTOMATIS ke database oleh `scs_callbacks.cpp` meskipun pemain sama sekali tidak membuka layar HP in-game (`F11`) selama perjalanan**.
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
 
@@ -424,36 +601,66 @@ Tidak semua anggota komunitas menggunakan Windows. Ekosistem Nismara harus mengu
 
 ---
 
-## 7. Cara Build, Deploy, dan Menjalankan Proyek
+## 7. Cara Build, Deploy, dan Menjalankan Proyek (Workflow Standar)
 
-### A. Build & Deploy `NismaraTracker.dll`
-Jalankan perintah PowerShell berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker`:
+Untuk menghasilkan build dan installer resmi yang konsisten, bersih, dan terstruktur sesuai standar produksi, ikuti alur 3 langkah build berikut:
+
+### Langkah 1: Build & Deploy Frontend Phone UI (`phone-ui`)
+Aplikasi antarmuka in-game berbasis React 19 + Tailwind CSS dan dieksekusi oleh runtime Ultralight WebKit:
 ```powershell
+cd "d:\Project\Nismara Transport\Project\nismara-tracker\phone-ui"
+
+# 1. Build bundle produksi (tsc && vite build)
+npm run build
+
+# 2. Sinkronkan ke folder sumber resources Companion App (untuk dipaketkan ke installer)
+Copy-Item -Recurse -Force "dist\*" "..\nismara-companion\src-tauri\resources\web-ui\"
+
+# (Opsional) Jika ingin langsung menguji di local tanpa perlu install ulang installer:
+npm run deploy:local
+# Perintah di atas otomatis mengompilasi dan menyalin dist/* ke:
+# %LOCALAPPDATA%\Nismara Companion\resources\web-ui\
+```
+
+### Langkah 2: Build Standalone C++20 Plugin (`NismaraTracker.dll`)
+Plugin native telemetri ETS2/ATS dikompilasi menggunakan CMake + MSBuild Release x64 dengan static runtime `/MT`:
+```powershell
+cd "d:\Project\Nismara Transport\Project\nismara-tracker"
+
+# 1. Kompilasi binary Release x64
 cmake --build build --config Release
+
+# 2. Salin binary terbaru ke folder sumber resources Companion App
+Copy-Item -Path "bin\NismaraTracker.dll" -Destination "nismara-companion\src-tauri\resources\NismaraTracker.dll" -Force
+
+# (Opsional) Salin langsung ke folder resources local dan folder plugins game ETS2 untuk pengujian instan:
+Copy-Item -Path "bin\NismaraTracker.dll" -Destination "$env:LOCALAPPDATA\Nismara Companion\resources\NismaraTracker.dll" -Force
 Copy-Item -Path "bin\NismaraTracker.dll" -Destination "C:\Program Files (x86)\Steam\steamapps\common\Euro Truck Simulator 2\bin\win_x64\plugins\NismaraTracker.dll" -Force
 ```
-*(Catatan: Jika game ETS2 sedang berjalan dan me-lock file `NismaraTracker.dll`, tutup game terlebih dahulu sebelum menjalankan `Copy-Item`).*
+*(Catatan: Jika game ETS2 sedang aktif dan me-lock berkas `NismaraTracker.dll`, tutup game terlebih dahulu sebelum menyalin).*
 
-### B. Menjalankan `nismara-tracker-server`
-Jalankan perintah PowerShell berikut dari direktori `D:\Project\Nismara Transport\Project\nismara-tracker-server`:
+### Langkah 3: Build & Package Desktop Hub (`Nismara Companion`)
+Aplikasi desktop companion berbasis Tauri v2 + React:
 ```powershell
-node server.js
+cd "d:\Project\Nismara Transport\Project\nismara-tracker\nismara-companion"
+
+# Mode Development (Hot-Reload)
+npm run tauri dev
+
+# Mode Build Installer Produksi (NSIS EXE & WiX MSI)
+npm run build
+npm run tauri build
 ```
-Saat development server berjalan di `http://localhost:3100` (endpoint health check: `GET http://localhost:3100/health`), dan saat production berjalan 24/7 pada IP/domain server publik yang dikonfigurasi.
 
-### C. Menjalankan & Membangun `Nismara Companion`
-Jalankan perintah berikut dari direktori `d:\Project\Nismara Transport\Project\nismara-tracker\nismara-companion`:
-- **Mode Development (Hot-Reload)**:
-  ```powershell
-  npm run tauri dev
-  ```
-- **Kompilasi Standalone Release Installer (`.exe` / `.msi` di Windows, `.AppImage` / `.deb` di Linux, `.dmg` / `.app` di macOS)**:
-  ```powershell
-  npm run tauri build
-  ```
-  Binary hasil kompilasi akan berada di folder `src-tauri/target/release/` dan file setup installer di `src-tauri/target/release/bundle/`.
+#### Output Berkas Installer Setup yang Dihasilkan:
+- **NSIS Setup Installer (`.exe` — Standar Distribusi Utama ke Driver)**:
+  `nismara-companion\src-tauri\target\release\bundle\nsis\Nismara Companion_1.0.1_x64-setup.exe` (~21.5 MB)
+- **Windows Installer (`.msi`)**:
+  `nismara-companion\src-tauri\target\release\bundle\msi\Nismara Companion_1.0.1_x64_en-US.msi` (~29.5 MB)
 
-### C. Menjalankan & Memelihara Dedicated Tracker Server (`nismara-tracker-server`)
+Saat pengguna menjalankan installer tersebut, installer akan menempatkan seluruh dependensi (`NismaraTracker.dll`, `runtime/` Ultralight, dan `web-ui/` React 19) secara rapi dan otomatis ke dalam subfolder **`resources/`** (`%LOCALAPPDATA%\Nismara Companion\resources\`).
+
+### D. Menjalankan & Memelihara Dedicated Tracker Server (`nismara-tracker-server`)
 Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\nismara-tracker-server`:
 - **Mode Development (Hot-Reload)**:
   ```bash
@@ -489,20 +696,30 @@ Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\n
 ## 8. Aturan Penting: DO & DON'T (Guardrails untuk AI Agent)
 
 ### DO (Yang Harus Dilakukan)
-- **DO**: Pertahankan arsitektur UI in-game **100% Native C++ Dear ImGui (`src/ui/tablet_gui.cpp`)** yang ringan dan cepat tanpa ketergantungan CEF Browser atau WebSocket streaming.
-- **DO**: Pertahankan kompilasi **single-binary (`NismaraTracker.dll` / `.so` / `.dylib`)** dengan static runtime (`/MT` pada MSVC). Semua aset visual bawaan (seperti logo atau ikon) harus digambar secara prosedural dengan `ImDrawList` atau di-embed sebagai array byte C++ (seperti `include/ui/nismara_logo_data.hpp`).
+- **DO**: Gunakan arsitektur **Ultralight 2.0 WebKit (`src/ui/web_surface_bridge.cpp` + `phone-ui/` React 19)** sebagai renderer utama layar **Companion Phone (Nismara OS)** di dalam bezel `tablet_gui.cpp`, dengan fallback otomatis ke Dear ImGui jika runtime Ultralight tidak ditemukan.
+- **DO**: Gunakan penamaan resmi **"Companion Phone"** dan **"Nismara OS"** (mengambil versi dari macro CMake `NISMARA_VERSION`).
+- **DO**: Ambil data identitas truk (`brand_id`, `brand`, `id`, `name`, `license_plate`) dan gigi transmisi (`gear_displayed`, `gear_selected` $\rightarrow$ `gear_text`) **100% dari SCS Telemetry SDK (`src/core/scs_callbacks.cpp`)**, lalu panggil `TelemetryState::Get().MatchActiveFleet()`.
+- **DO**: Filter daftar armada (`fleets`) di garasi sesuai game yang sedang berjalan (`ETS2` vs `ATS`), baik pada pencocokan armada (`MatchActiveFleet`), pengiriman telemetri (`web_surface_bridge.cpp`), maupun tampilan aplikasi `GarageApp.tsx`.
+- **DO**: Gunakan pola `<div data-scroll-container="true" className="scroll-area"><div style={{ display: 'flex', flexDirection: 'column', ... }}>` pada seluruh layar aplikasi `phone-ui/` agar kartu tidak tertekan oleh Flexbox dan selalu dapat di-scroll dengan roda mouse hingga paling bawah.
+- **DO**: Pertahankan kompilasi **single-binary (`NismaraTracker.dll` / `.so` / `.dylib`)** dengan static runtime (`/MT` pada MSVC) dan `/DELAYLOAD` untuk DLL Ultralight dari `%LOCALAPPDATA%\Nismara Companion\runtime`.
 - **DO**: Utamakan kompatibilitas **Cross-Platform (Windows, Linux Proton/Native, dan macOS)** serta skala **~300+ pengguna** dengan direktori yang berbeda-beda di setiap perubahan kode.
-- **DO**: Pertahankan protokol **Gatekeeper (`Global\NismaraCompanionRunning` + Cross-Platform Heartbeat)** sehingga plugin in-game hanya dapat membuka overlay jika Nismara Companion Desktop App sedang berjalan.
+- **DO**: Pertahankan protokol **Gatekeeper (`IsCompanionAppRunning()` via `Global\NismaraCompanionRunning` + Cross-Platform Heartbeat)** baik untuk membuka overlay `F11` maupun untuk **mencatat pekerjaan ke database (`scs_callbacks.cpp`: `/jobs/start`, `/jobs/complete`, `/jobs/cancel`)**. Jika aplikasi desktop `Nismara Companion` TIDAK dibuka, job TIDAK BOLEH tercatat. Jika `Nismara Companion` sedang berjalan di background, job WAJIB tetap tercatat otomatis meskipun layar HP in-game (`F11`) tertutup.
 - **DO**: Selalu gunakan komunikasi HTTP asynchronous di thread terpisah (`ApiClient`) untuk seluruh request jaringan dari C++. Jangan pernah melakukan jaringan sinkron di dalam thread DirectX `Present` atau callback SCS SDK.
-- **DO**: Pastikan setiap modifikasi UI di `src/ui/tablet_gui.cpp` tetap berada di dalam batas layar OLED iPhone 16 (`screen_min` hingga `screen_max`) dan sebelum pemanggilan `RenderPhoneBezelOverlay` agar tidak ada elemen visual yang bocor keluar dari bezel HP.
 - **DO**: Gunakan `String(user.discordId)` dan `guildId: "863959415702028318"` saat melakukan query ke koleksi `currencies` dan `points`, serta `ObjectId(user._id)` saat melakukan query ke koleksi `fleets` dan `garages`.
 - **DO**: Pertahankan mekanisme akumulasi damage (`job_accum_*`) dan batas maksimum jarak tempuh `+25%` dari `plannedDistanceKm` baik di sisi client C++ maupun di sisi server Node.js.
-- **DO**: Jika memperbarui aset logo dari file SVG, gunakan skrip rasterisasi supersampling (seperti yang menghasilkan `include/ui/nismara_logo_data.hpp`) agar kurva bezier dan `fill-rule="evenodd"` tetap tajam tanpa artefak.
 - **DO**: Selalu bungkus seluruh callback SCS Telemetry SDK (`scs_telemetry_init`, `scs_telemetry_shutdown`, `OnTelemetryConfiguration`, `OnTelemetryGameplayEvent`) dan seluruh entry point thread latar belakang (`std::thread`) dengan top-level `try { ... } catch (...) {}`. Uncaught exception yang lolos dari thread atau callback SCS SDK akan langsung memanggil `std::terminate()` dan mematikan game ETS2/ATS seketika tanpa dialog *crash*.
 - **DO**: Pisahkan penanganan eksepsi Win32 SEH (`__try / __except`) ke dalam static helper fungsi murni (tanpa objek C++ yang memerlukan stack unwinding) jika digabungkan dengan C++ `try / catch`, untuk mencegah konflik kompilator MSVC `error C2712` dan `error C2713`.
 - **DO**: Gunakan default constructor `ImFontConfig cfg;` saat memuat font di Dear ImGui, **jangan pernah** menggunakan zero-initialization `ImFontConfig cfg = {};` karena akan membuat `ExtraSizeScale = 0.0f` dan memicu floating-point division by zero di dalam rasterizer font atlas ImGui.
 
 ### DON'T (Yang Dilarang Dilakukan)
+- **DON'T**: **Jangan pernah** memasang hook pada `IDirectInput8W::CreateDevice` (VTable index `3`) di `src/hooks/wndproc_hook.cpp`! Hooking `CreateDevice` akan menyebabkan game langsung **CRASH** ketika pengguna mencolokkan perangkat Joystick, Steering Wheel, atau Gamepad saat bermain. Hanya pasang hook pada `GetDeviceState` (index `9`) dan `GetDeviceData` (index `10`) pada device `GUID_SysMouse`.
+- **DON'T**: **Jangan pernah** memaksa atau meng-hardcode nomor lambung truk (`fleet_number` seperti `NL-074`) apabila `has_matched_fleet == false`. Jika truk yang dipakai di game tidak cocok dengan daftar kepemilikan `fleets` user, truk tersebut adalah **Truk Sewa (`SEWA` / `[UNREGISTERED]`)**.
+- **DON'T**: **Jangan pernah** membaca atau menebak truk aktif dari `game.log.txt`. Identitas truk wajib berasal 100% dari callback `SCS_TELEMETRY_EVENT_configuration` (`"truck"`) pada SCS Telemetry SDK.
+- **DON'T**: **Jangan pernah** mengarang field atau fitur fiktif di UI `phone-ui/` yang tidak ada di `TelemetryState` atau `TabletGui` (gunakan pedoman informasi dari `src/ui/tablet_gui.cpp` dan `src/ui/web_surface_bridge.cpp`).
+- **DON'T**: **Jangan pernah** mengalikan field `unfix_engine`, `unfix_transmission`, `unfix_brakes`, atau `unfix_tires` dari koleksi `fleets` dengan `100` di UI, karena nilai di database sudah berbentuk persentase `0–100` (misal `2.84` = `2.84%`).
+- **DON'T**: **Jangan pernah** mengartikan field `maintenance.{engine,tires,transmission,brakes}` (`50000`, `20000`, `70000`, `35000`) sebagai jarak tempuh sejak servis; field tersebut adalah **Target Odometer Servis Berkala Berikutnya** (truk wajib servis saat odometer mencapai angka tersebut).
+- **DON'T**: **Jangan pernah** menggunakan nama `"iPhone 16"` atau `"iOS 18"` di teks antarmuka pengguna; selalu gunakan **"Companion Phone"** dan **"Nismara OS"**.
+- **DON'T**: **Jangan pernah** menghapus pemeriksaan `IsCompanionAppRunning()` pada pengiriman job di `src/core/scs_callbacks.cpp`. Job tidak boleh tercatat apabila aplikasi desktop `Nismara Companion` belum dibuka.
 - **DON'T**: **Jangan pernah** mengandalkan path bundel tunggal pada Tauri v2 installer tanpa memeriksa folder `_up_/resources/`. Path relatif `"../resources/NismaraTracker.dll"` di `tauri.conf.json` akan diekstrak oleh WiX/NSIS ke dalam subfolder `_up_\resources\`. Pastikan helper Rust `find_bundled_plugin_source` memeriksa `_up_/resources/` serta file DLL diletakkan di `src-tauri/resources/`.
 - **DON'T**: **Jangan pernah** menggunakan CEF Browser (`CefSharp`) atau WebSocket streaming untuk merender UI `tablet_gui`, karena akan membengkakkan ukuran instalasi ratusan megabyte dan menguras resource CPU/RAM pengguna.
 - **DON'T**: **Jangan pernah** meng-hardcode path direktori lokal developer (seperti `F:\SteamLibrary\...`) atau token personal developer (`NSM-...`) sebagai default di kode client maupun companion app.

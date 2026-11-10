@@ -420,48 +420,60 @@ export default function App() {
     }
   };
 
-  // Fetch Articles from Sanity CMS (Nismara Group)
-  const fetchSanityArticles = async () => {
+  // Fetch Articles from Sanity CMS via Nismara Tracker Server (/api/tracker/news)
+  const fetchSanityArticles = async (forceRefresh = false) => {
     setNewsLoading(true);
     setNewsError(null);
     try {
-      const sanityQuery = encodeURIComponent(
-        `*[_type == "article" && defined(slug.current)] | order(publishedAt desc) { _id, title, slug, publishedAt, mainImage, author->{ name, image }, categories[]->{ title }, seoDescription, body }`
-      );
-      const sanityUrl = `https://yi1d1k89.api.sanity.io/v2024-03-15/data/query/production?query=${sanityQuery}`;
+      const qs = forceRefresh ? "?refresh=1" : "";
+      const endpoints = [
+        `${PRODUCTION_API_URL}/api/tracker/news${qs}`,
+        `http://localhost:3100/api/tracker/news${qs}`,
+      ];
 
       let data: SanityArticle[] = [];
-      try {
-        const res = await fetch(sanityUrl);
-        if (res.ok) {
-          const json = await res.json();
-          if (Array.isArray(json.result)) {
-            data = json.result;
-          }
-        }
-      } catch (sanityErr) {
-        console.warn("[News] Sanity CDN fetch error, falling back to Web API:", sanityErr);
-      }
+      let lastStatusError = "";
 
-      // Fallback to nismara web api if Sanity CDN didn't return
-      if (data.length === 0) {
-        const fallbackRes = await fetch("https://nismara.web.id/api/articles");
-        if (fallbackRes.ok) {
-          const fallbackJson = await fallbackRes.json();
-          if (Array.isArray(fallbackJson)) {
-            data = fallbackJson;
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
+          });
+          if (res.ok) {
+            const json = await res.json();
+            const list = Array.isArray(json.articles)
+              ? json.articles
+              : Array.isArray(json.data)
+              ? json.data
+              : Array.isArray(json.result)
+              ? json.result
+              : Array.isArray(json)
+              ? json
+              : [];
+            if (list.length > 0) {
+              data = list;
+              break;
+            }
+          } else {
+            lastStatusError = `HTTP ${res.status}`;
           }
+        } catch (err: any) {
+          lastStatusError = err?.message || String(err);
         }
       }
 
       if (data.length > 0) {
         setArticles(data);
       } else {
-        setNewsError("Tidak ada artikel yang ditemukan saat ini.");
+        setNewsError(
+          lastStatusError
+            ? `Gagal memuat berita dari server (${lastStatusError}).`
+            : "Tidak ada artikel yang ditemukan saat ini.",
+        );
       }
     } catch (err: any) {
-      console.error("[News] Failed to load news from Sanity:", err);
-      setNewsError(err?.message || "Gagal memuat berita dari Sanity.");
+      console.error("[News] Failed to load news from Tracker Server:", err);
+      setNewsError(err?.message || "Gagal memuat berita dari server.");
     } finally {
       setNewsLoading(false);
     }
@@ -489,19 +501,37 @@ export default function App() {
     setEventsLoading(true);
     setEventsError(null);
     try {
-      const res = await fetch(`${PRODUCTION_API_URL}/api/tracker/events`, {
-        headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
-      });
+      const endpoints = [
+        `${PRODUCTION_API_URL}/api/tracker/events`,
+        `http://localhost:3100/api/tracker/events`,
+      ];
 
-      if (!res.ok) {
-        throw new Error(`Server status ${res.status}`);
+      let loadedFeed: EventFeedItem[] | null = null;
+      let lastErr = "";
+
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(endpoint, {
+            headers: driverToken ? { Authorization: `Bearer ${driverToken}` } : {},
+          });
+          if (res.ok) {
+            const json: EventsApiResponse = await res.json();
+            if (json.success && json.data?.feed) {
+              loadedFeed = json.data.feed;
+              break;
+            }
+          } else {
+            lastErr = `Server status ${res.status}`;
+          }
+        } catch (e: any) {
+          lastErr = e?.message || String(e);
+        }
       }
 
-      const json: EventsApiResponse = await res.json();
-      if (json.success && json.data?.feed) {
-        setEventsFeed(json.data.feed);
+      if (loadedFeed) {
+        setEventsFeed(loadedFeed);
       } else {
-        setEventsError("Data event tidak tersedia.");
+        setEventsError(lastErr || "Data event tidak tersedia.");
       }
     } catch (err: any) {
       console.error("[Events] Failed to load events:", err);
@@ -1089,7 +1119,7 @@ export default function App() {
 
               {/* Refresh Button */}
               <button
-                onClick={fetchSanityArticles}
+                onClick={() => fetchSanityArticles(true)}
                 disabled={newsLoading}
                 className="self-start md:self-auto px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 border border-slate-700/80 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer disabled:opacity-50"
               >
@@ -1127,7 +1157,7 @@ export default function App() {
                   <span>{newsError}</span>
                 </div>
                 <button
-                  onClick={fetchSanityArticles}
+                  onClick={() => fetchSanityArticles(true)}
                   className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 font-bold rounded-lg cursor-pointer transition-all"
                 >
                   Coba Lagi

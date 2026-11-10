@@ -1,12 +1,9 @@
 #pragma once
 
 #include "core/telemetry_state.hpp"
+#include <imgui.h>
 #include <atomic>
 #include <string>
-
-struct ImDrawList;
-struct ImFont;
-struct ImVec2;
 
 namespace nismara::ui {
 
@@ -77,6 +74,8 @@ public:
      * @brief Opens a specific app on the phone.
      */
     void OpenApp(PhoneAppId app) noexcept;
+
+    uint32_t GetOpenSequence() const noexcept { return open_seq_.load(); }
 
 private:
     TabletGui();
@@ -160,6 +159,7 @@ private:
         bool is_active_in_game);
 
     std::atomic<bool> visible_{false};
+    std::atomic<uint32_t> open_seq_{0};
     PhoneScreenState screen_state_{PhoneScreenState::LockScreen};
     PhoneAppId active_app_{PhoneAppId::None};
     bool dynamic_island_expanded_{false};

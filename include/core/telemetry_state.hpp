@@ -53,6 +53,20 @@ struct DriverFleetVehicle {
     double maint_tires{20000.0};
     double maint_transmission{70000.0};
     double maint_brakes{35000.0};
+
+    // Last Maintenance Odometer (km)
+    double last_maint_engine{0.0};
+    double last_maint_tires{0.0};
+    double last_maint_transmission{0.0};
+    double last_maint_brakes{0.0};
+
+    // Maintenance Schedule & Fleet Stats
+    std::string maintenance_start_date{};
+    std::string maintenance_end_date{};
+    int32_t jobs_count{0};
+    double total_revenue{0.0};
+    double total_fuel_used{0.0};
+    double total_damage_cost{0.0};
 };
 
 /**
@@ -71,6 +85,10 @@ struct DriverGarageSummary {
     int32_t safebox_level{1};
     int32_t max_penalty_tickets{10}; // 10 + (safebox_level - 1) * 5
     double operational_cost{0.0};
+    double fleet_operational_cost{0.0};
+    double fuel_operational_cost{0.0};
+    double safebox_operational_cost{0.0};
+    std::string next_payment_date{};
 };
 
 /**
@@ -176,6 +194,7 @@ struct TelemetrySnapshot {
     uint32_t game_version_minor{0};
     bool sdk_active{false};
     bool is_paused{true};
+    bool is_driving_in_world{false};
     uint32_t game_time_minutes{0};
     float local_scale{1.0f};
 
@@ -364,6 +383,18 @@ public:
      * @brief Acquires a shared lock (reader) and returns an immutable copy of the telemetry state.
      */
     TelemetrySnapshot GetSnapshot() const;
+
+    /**
+     * @brief Checks if the driver is currently in an active truck cabin driving session
+     *        (SDK active, not paused, not in main menu, not in loading screen, truck loaded).
+     */
+    bool IsInCabinDrivingSession() const {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        return snapshot_.sdk_active &&
+               !snapshot_.is_paused &&
+               snapshot_.is_driving_in_world &&
+               (!snapshot_.truck_in_game_id.empty() || !snapshot_.truck_name.empty());
+    }
 
     /**
      * @brief Acquires an exclusive lock (writer) and applies mutations from SCS SDK callbacks.

@@ -2,6 +2,7 @@
 #include "hooks/wndproc_hook.hpp"
 #include "ui/tablet_gui.hpp"
 #include "ui/texture_manager.hpp"
+#include "ui/web_surface_bridge.hpp"
 
 #include "MinHook.h"
 #include "imgui.h"
@@ -47,7 +48,8 @@ void Dx11Hook::Shutdown() {
         MH_Uninitialize();
     }
 
-    // 3. Tear down Dear ImGui context and DX11 render target resources
+    // 3. Tear down Dear ImGui context, WebSurfaceBridge, and DX11 render target resources
+    nismara::ui::WebSurfaceBridge::Instance().Shutdown();
     nismara::ui::TextureManager::Instance().ReleaseAll();
     if (imgui_initialized_.exchange(false)) {
         ImGui_ImplDX11_Shutdown();
@@ -67,11 +69,126 @@ void Dx11Hook::Shutdown() {
     }
 }
 
+namespace {
+
+inline HRESULT SafeCallPresent(
+    Dx11Hook::PresentFn fn,
+    IDXGISwapChain* swap_chain,
+    UINT sync_interval,
+    UINT flags) {
+    __try {
+        return fn(swap_chain, sync_interval, flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return S_OK;
+    }
+}
+
+inline HRESULT SafeCallResizeBuffers(
+    Dx11Hook::ResizeBuffersFn fn,
+    IDXGISwapChain* swap_chain,
+    UINT buffer_count,
+    UINT width,
+    UINT height,
+    DXGI_FORMAT new_format,
+    UINT swap_chain_flags) {
+    __try {
+        return fn(swap_chain, buffer_count, width, height, new_format, swap_chain_flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return S_OK;
+    }
+}
+
+inline BOOL SafeCallSetCursorPos(Dx11Hook::SetCursorPosFn fn, int x, int y) {
+    __try {
+        return fn(x, y);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return TRUE;
+    }
+}
+
+inline BOOL SafeCallClipCursor(Dx11Hook::ClipCursorFn fn, const RECT* rect) {
+    __try {
+        return fn(rect);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return TRUE;
+    }
+}
+
+inline HRESULT SafeCallDIAcquire(Dx11Hook::DIAcquireFn fn, IDirectInputDevice8W* device) {
+    __try {
+        return fn(device);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIUnacquire(Dx11Hook::DIUnacquireFn fn, IDirectInputDevice8W* device) {
+    __try {
+        return fn(device);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIGetDeviceState(
+    Dx11Hook::DIGetDeviceStateFn fn,
+    IDirectInputDevice8W* device,
+    DWORD cb_data,
+    LPVOID lpv_data) {
+    __try {
+        return fn(device, cb_data, lpv_data);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline HRESULT SafeCallDIGetDeviceData(
+    Dx11Hook::DIGetDeviceDataFn fn,
+    IDirectInputDevice8W* device,
+    DWORD cb_object_data,
+    LPDIDEVICEOBJECTDATA rgdod,
+    LPDWORD pdw_in_out,
+    DWORD dw_flags) {
+    __try {
+        return fn(device, cb_object_data, rgdod, pdw_in_out, dw_flags);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return DI_OK;
+    }
+}
+
+inline bool SafeCheckMouseCaps(IDirectInputDevice8W* device, DIDEVCAPS* caps) {
+    __try {
+        return SUCCEEDED(device->GetCapabilities(caps));
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+} // namespace
+
+void Dx11Hook::OnDeviceChange() {
+    last_device_change_tick_.store(GetTickCount64());
+    active_mouse_device_.store(nullptr);
+    mouse_unacquired_for_overlay_.store(false);
+    for (size_t i = 0; i < kMaxCachedNonMouseDevices; ++i) {
+        non_mouse_devices_[i].store(nullptr);
+    }
+
+    if (nismara::ui::TabletGui::Instance().IsVisible()) {
+        nismara::ui::TabletGui::Instance().SetVisible(false);
+        last_frame_visible_ = false;
+        if (original_clip_cursor_ != nullptr) {
+            SafeCallClipCursor(original_clip_cursor_, nullptr);
+        }
+        CleanupRenderTarget();
+    }
+}
+
 void Dx11Hook::OnOverlayVisibilityChanged(bool visible) {
     if (visible) {
         // Release any Win32 cursor clipping and mouse capture held by the game
         if (original_clip_cursor_ != nullptr) {
-            original_clip_cursor_(nullptr);
+            SafeCallClipCursor(original_clip_cursor_, nullptr);
         } else {
             ClipCursor(nullptr);
         }
@@ -80,7 +197,7 @@ void Dx11Hook::OnOverlayVisibilityChanged(bool visible) {
         // Unacquire DirectInput8 mouse device so Windows unlocks OS cursor movement
         IDirectInputDevice8W* mouse_dev = active_mouse_device_.load();
         if (mouse_dev != nullptr && original_di_unacquire_ != nullptr) {
-            original_di_unacquire_(mouse_dev);
+            SafeCallDIUnacquire(original_di_unacquire_, mouse_dev);
             mouse_unacquired_for_overlay_.store(true);
         }
 
@@ -97,7 +214,7 @@ void Dx11Hook::OnOverlayVisibilityChanged(bool visible) {
             }
             if (target_pt.x >= 0 && target_pt.y >= 0) {
                 if (original_set_cursor_pos_ != nullptr) {
-                    original_set_cursor_pos_(target_pt.x, target_pt.y);
+                    SafeCallSetCursorPos(original_set_cursor_pos_, target_pt.x, target_pt.y);
                 } else {
                     SetCursorPos(target_pt.x, target_pt.y);
                 }
@@ -111,7 +228,7 @@ void Dx11Hook::OnOverlayVisibilityChanged(bool visible) {
         IDirectInputDevice8W* mouse_dev = active_mouse_device_.load();
         if (mouse_dev != nullptr && original_di_acquire_ != nullptr &&
             mouse_unacquired_for_overlay_.exchange(false)) {
-            original_di_acquire_(mouse_dev);
+            SafeCallDIAcquire(original_di_acquire_, mouse_dev);
         }
     }
 }
@@ -368,109 +485,52 @@ bool Dx11Hook::ExtractDirectInputVTable(
     return success;
 }
 
-namespace {
-
-inline HRESULT SafeCallPresent(
-    Dx11Hook::PresentFn fn,
-    IDXGISwapChain* swap_chain,
-    UINT sync_interval,
-    UINT flags) {
-    __try {
-        return fn(swap_chain, sync_interval, flags);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return S_OK;
+void Dx11Hook::MarkNonMouseDevice(IDirectInputDevice8W* device) {
+    if (device == nullptr) {
+        return;
+    }
+    auto& self = Instance();
+    for (size_t i = 0; i < kMaxCachedNonMouseDevices; ++i) {
+        IDirectInputDevice8W* cur = self.non_mouse_devices_[i].load();
+        if (cur == device) {
+            return;
+        }
+        if (cur == nullptr) {
+            IDirectInputDevice8W* expected = nullptr;
+            if (self.non_mouse_devices_[i].compare_exchange_strong(expected, device)) {
+                return;
+            }
+        }
     }
 }
 
-inline HRESULT SafeCallResizeBuffers(
-    Dx11Hook::ResizeBuffersFn fn,
-    IDXGISwapChain* swap_chain,
-    UINT buffer_count,
-    UINT width,
-    UINT height,
-    DXGI_FORMAT new_format,
-    UINT swap_chain_flags) {
-    __try {
-        return fn(swap_chain, buffer_count, width, height, new_format, swap_chain_flags);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return S_OK;
+bool Dx11Hook::IsKnownNonMouseDevice(IDirectInputDevice8W* device) {
+    if (device == nullptr) {
+        return true;
     }
-}
-
-inline BOOL SafeCallSetCursorPos(Dx11Hook::SetCursorPosFn fn, int x, int y) {
-    __try {
-        return fn(x, y);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return TRUE;
+    auto& self = Instance();
+    for (size_t i = 0; i < kMaxCachedNonMouseDevices; ++i) {
+        if (self.non_mouse_devices_[i].load() == device) {
+            return true;
+        }
     }
+    return false;
 }
-
-inline BOOL SafeCallClipCursor(Dx11Hook::ClipCursorFn fn, const RECT* rect) {
-    __try {
-        return fn(rect);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return TRUE;
-    }
-}
-
-inline HRESULT SafeCallDIAcquire(Dx11Hook::DIAcquireFn fn, IDirectInputDevice8W* device) {
-    __try {
-        return fn(device);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return DI_OK;
-    }
-}
-
-inline HRESULT SafeCallDIUnacquire(Dx11Hook::DIUnacquireFn fn, IDirectInputDevice8W* device) {
-    __try {
-        return fn(device);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return DI_OK;
-    }
-}
-
-inline HRESULT SafeCallDIGetDeviceState(
-    Dx11Hook::DIGetDeviceStateFn fn,
-    IDirectInputDevice8W* device,
-    DWORD cb_data,
-    LPVOID lpv_data) {
-    __try {
-        return fn(device, cb_data, lpv_data);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return DI_OK;
-    }
-}
-
-inline HRESULT SafeCallDIGetDeviceData(
-    Dx11Hook::DIGetDeviceDataFn fn,
-    IDirectInputDevice8W* device,
-    DWORD cb_object_data,
-    LPDIDEVICEOBJECTDATA rgdod,
-    LPDWORD pdw_in_out,
-    DWORD dw_flags) {
-    __try {
-        return fn(device, cb_object_data, rgdod, pdw_in_out, dw_flags);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return DI_OK;
-    }
-}
-
-inline bool SafeCheckMouseCaps(IDirectInputDevice8W* device, DIDEVCAPS* caps) {
-    __try {
-        return SUCCEEDED(device->GetCapabilities(caps));
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
-    }
-}
-
-} // namespace
 
 bool Dx11Hook::IsMouseDevice(IDirectInputDevice8W* device) {
     if (device == nullptr) {
         return false;
     }
-    if (device == Instance().active_mouse_device_.load()) {
+    auto& self = Instance();
+    if (device == self.active_mouse_device_.load()) {
         return true;
+    }
+    if (IsKnownNonMouseDevice(device)) {
+        return false;
+    }
+    // Never call GetCapabilities while ETS2's [di8] subsystem is handling WM_DEVICECHANGE
+    if (GetTickCount64() - self.last_device_change_tick_.load() < 2000ULL) {
+        return false;
     }
 
     DIDEVCAPS caps = {};
@@ -479,9 +539,11 @@ bool Dx11Hook::IsMouseDevice(IDirectInputDevice8W* device) {
         const BYTE dev_type = LOBYTE(caps.dwDevType);
         // DI8DEVTYPE_MOUSE (0x12) or legacy DIDEVTYPE_MOUSE (2)
         if (dev_type == DI8DEVTYPE_MOUSE || dev_type == 2) {
-            Instance().active_mouse_device_.store(device);
+            self.active_mouse_device_.store(device);
             return true;
         }
+        // Cache keyboard/joystick/wheel/gamepad so we never call GetCapabilities on it again
+        MarkNonMouseDevice(device);
     }
     return false;
 }
@@ -501,6 +563,17 @@ void Dx11Hook::CreateRenderTarget(IDXGISwapChain* swap_chain) {
 
 void Dx11Hook::CleanupRenderTarget() {
     if (main_rtv_ != nullptr) {
+        if (context_ != nullptr) {
+            ID3D11RenderTargetView* bound_rtv = nullptr;
+            ID3D11DepthStencilView* bound_dsv = nullptr;
+            context_->OMGetRenderTargets(1, &bound_rtv, &bound_dsv);
+            if (bound_rtv == main_rtv_) {
+                ID3D11RenderTargetView* null_views[1] = {nullptr};
+                context_->OMSetRenderTargets(1, null_views, bound_dsv);
+            }
+            if (bound_rtv != nullptr) bound_rtv->Release();
+            if (bound_dsv != nullptr) bound_dsv->Release();
+        }
         main_rtv_->Release();
         main_rtv_ = nullptr;
     }
@@ -521,8 +594,6 @@ void Dx11Hook::InitializeImGui(IDXGISwapChain* swap_chain) {
     DXGI_SWAP_CHAIN_DESC sd = {};
     swap_chain->GetDesc(&sd);
     game_hwnd_ = sd.OutputWindow;
-
-    CreateRenderTarget(swap_chain);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -572,11 +643,10 @@ BOOL WINAPI Dx11Hook::HookedClipCursor(const RECT* rect) {
 
 HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIAcquire(IDirectInputDevice8W* device) {
     auto& self = Dx11Hook::Instance();
-    if (!self.shutting_down_.load() && nismara::ui::TabletGui::Instance().IsVisible() && IsMouseDevice(device)) {
-        if (self.original_di_unacquire_ != nullptr) {
-            SafeCallDIUnacquire(self.original_di_unacquire_, device);
-        }
-        self.mouse_unacquired_for_overlay_.store(true);
+    if (!self.shutting_down_.load() &&
+        (GetTickCount64() - self.last_device_change_tick_.load() >= 2000ULL) &&
+        nismara::ui::TabletGui::Instance().IsVisible() &&
+        IsMouseDevice(device)) {
         return DI_OK;
     }
     if (self.original_di_acquire_ != nullptr) {
@@ -590,35 +660,29 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceState(
     DWORD cb_data,
     LPVOID lpv_data) {
     auto& self = Dx11Hook::Instance();
-    if (!self.shutting_down_.load()) {
-        const bool is_mouse =
-            (cb_data == sizeof(DIMOUSESTATE) || cb_data == sizeof(DIMOUSESTATE2)) || IsMouseDevice(device);
-        if (is_mouse) {
+    if (!self.shutting_down_.load() &&
+        (GetTickCount64() - self.last_device_change_tick_.load() >= 2000ULL)) {
+        const bool is_mouse_format = (cb_data == sizeof(DIMOUSESTATE) || cb_data == sizeof(DIMOUSESTATE2));
+        if (is_mouse_format) {
             self.active_mouse_device_.store(device);
+        } else {
+            // Keyboard (256) or Joystick/Wheel/Gamepad (80 / 272): cache as non-mouse without calling GetCapabilities
+            MarkNonMouseDevice(device);
         }
 
-        if (nismara::ui::TabletGui::Instance().IsVisible()) {
-            if (is_mouse) {
-                if (self.original_di_unacquire_ != nullptr) {
+        if (is_mouse_format) {
+            if (nismara::ui::TabletGui::Instance().IsVisible()) {
+                if (!self.mouse_unacquired_for_overlay_.exchange(true) && self.original_di_unacquire_ != nullptr) {
                     SafeCallDIUnacquire(self.original_di_unacquire_, device);
                 }
-                self.mouse_unacquired_for_overlay_.store(true);
                 if (lpv_data != nullptr && cb_data > 0) {
                     std::memset(lpv_data, 0, cb_data);
                 }
                 return DI_OK;
-            }
-
-            // Also suppress DirectInput keyboard actions while typing in ImGui text inputs
-            if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput) {
-                if (lpv_data != nullptr && cb_data > 0) {
-                    std::memset(lpv_data, 0, cb_data);
+            } else if (self.mouse_unacquired_for_overlay_.exchange(false)) {
+                if (self.original_di_acquire_ != nullptr) {
+                    SafeCallDIAcquire(self.original_di_acquire_, device);
                 }
-                return DI_OK;
-            }
-        } else if (is_mouse && self.mouse_unacquired_for_overlay_.exchange(false)) {
-            if (self.original_di_acquire_ != nullptr) {
-                SafeCallDIAcquire(self.original_di_acquire_, device);
             }
         }
     }
@@ -636,22 +700,21 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedDIGetDeviceData(
     LPDWORD pdw_in_out,
     DWORD dw_flags) {
     auto& self = Dx11Hook::Instance();
-    if (!self.shutting_down_.load()) {
+    const bool overlay_visible = nismara::ui::TabletGui::Instance().IsVisible();
+    const bool needs_reacquire = self.mouse_unacquired_for_overlay_.load();
+
+    // Fast path: when phone is closed and mouse doesn't need re-acquire, pass straight through
+    // without touching any COM methods on joysticks/wheels/gamepads!
+    if (!self.shutting_down_.load() &&
+        (overlay_visible || needs_reacquire) &&
+        (GetTickCount64() - self.last_device_change_tick_.load() >= 2000ULL)) {
         const bool is_mouse = IsMouseDevice(device);
 
-        if (nismara::ui::TabletGui::Instance().IsVisible()) {
+        if (overlay_visible) {
             if (is_mouse) {
-                if (self.original_di_unacquire_ != nullptr) {
+                if (!self.mouse_unacquired_for_overlay_.exchange(true) && self.original_di_unacquire_ != nullptr) {
                     SafeCallDIUnacquire(self.original_di_unacquire_, device);
                 }
-                self.mouse_unacquired_for_overlay_.store(true);
-                if (pdw_in_out != nullptr) {
-                    *pdw_in_out = 0;
-                }
-                return DI_OK;
-            }
-
-            if (ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput) {
                 if (pdw_in_out != nullptr) {
                     *pdw_in_out = 0;
                 }
@@ -679,24 +742,56 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedPresent(IDXGISwapChain* swap_chain, UI
             : S_OK;
     }
 
+    // 1. If this is a test query, do not render or touch swap chain buffers
+    if (flags & DXGI_PRESENT_TEST) {
+        return SafeCallPresent(self.original_present_, swap_chain, sync_interval, flags);
+    }
+
+    // 2. If the window is minimized or not a valid window, do not render overlays
+    if (self.game_hwnd_ != nullptr && (IsIconic(self.game_hwnd_) || !IsWindow(self.game_hwnd_))) {
+        return SafeCallPresent(self.original_present_, swap_chain, sync_interval, flags);
+    }
+
     try {
         if (!self.imgui_initialized_.load()) {
             self.InitializeImGui(swap_chain);
         }
 
         if (self.imgui_initialized_.load() && self.context_ != nullptr) {
-            if (self.main_rtv_ == nullptr) {
-                self.CreateRenderTarget(swap_chain);
+            // Safety Guard: Strictly restrict phone overlay to active truck cabin driving sessions.
+            // Disallowed in Main Menu, Loading Screens, or when Paused.
+            const bool can_render = nismara::core::TelemetryState::Instance().IsInCabinDrivingSession();
+            if (!can_render && nismara::ui::TabletGui::Instance().IsVisible()) {
+                nismara::ui::TabletGui::Instance().SetVisible(false);
             }
 
-            if (self.main_rtv_ != nullptr) {
-                const bool tablet_visible = nismara::ui::TabletGui::Instance().IsVisible();
-                if (tablet_visible != self.last_frame_visible_) {
-                    self.last_frame_visible_ = tablet_visible;
-                    self.OnOverlayVisibilityChanged(tablet_visible);
+            const bool tablet_visible = nismara::ui::TabletGui::Instance().IsVisible() && can_render;
+            if (tablet_visible != self.last_frame_visible_) {
+                self.last_frame_visible_ = tablet_visible;
+                self.OnOverlayVisibilityChanged(tablet_visible);
+                if (!tablet_visible) {
+                    // Immediately release swapchain backbuffer reference when overlay is closed
+                    self.CleanupRenderTarget();
+                }
+            }
+
+            if (tablet_visible) {
+                if (self.main_rtv_ == nullptr) {
+                    self.CreateRenderTarget(swap_chain);
                 }
 
-                if (tablet_visible) {
+                if (self.main_rtv_ != nullptr) {
+                    // Initialize and update Ultralight web surface bridge on-demand
+                    auto& web_bridge = nismara::ui::WebSurfaceBridge::Instance();
+                    if (!web_bridge.IsInitialized() && !self.web_bridge_init_attempted_) {
+                        self.web_bridge_init_attempted_ = true;
+                        web_bridge.Initialize();
+                    }
+                    if (web_bridge.IsInitialized()) {
+                        web_bridge.DispatchTelemetry();
+                        web_bridge.UpdateTexture(self.device_, self.context_);
+                    }
+
                     ImGui_ImplDX11_NewFrame();
                     ImGui_ImplWin32_NewFrame();
                     ImGui::NewFrame();
@@ -726,12 +821,12 @@ HRESULT STDMETHODCALLTYPE Dx11Hook::HookedResizeBuffers(
     UINT swap_chain_flags) {
     auto& self = Dx11Hook::Instance();
     try {
+        nismara::ui::WebSurfaceBridge::Instance().ReleaseD3DResources();
         self.CleanupRenderTarget();
     } catch (...) {}
 
     if (self.original_resize_buffers_ != nullptr) {
-        return SafeCallResizeBuffers(
-            self.original_resize_buffers_,
+        return self.original_resize_buffers_(
             swap_chain,
             buffer_count,
             width,

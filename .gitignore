@@ -26,6 +26,13 @@ cmake-build-*/
 !nismara-companion/resources/*.dll
 !nismara-companion/resources/*.so
 !nismara-companion/resources/*.dylib
+!nismara-companion/src-tauri/resources/*.dll
+!nismara-companion/src-tauri/resources/*.so
+!nismara-companion/src-tauri/resources/*.dylib
+
+# Allow Ultralight build import libraries and core ICU resources
+!vendor/ultralight/lib/*.lib
+!vendor/ultralight/resources/*.dat
 
 # ==========================================
 # Node.js & Vite Frontend
@@ -36,6 +43,8 @@ dist/
 **/dist/
 dist-ssr/
 **/dist-ssr/
+.vite/
+**/.vite/
 *.local
 npm-debug.log*
 yarn-debug.log*

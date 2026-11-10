@@ -96,6 +96,18 @@ public:
      */
     std::filesystem::path GetHeartbeatFilePath() const;
 
+    /**
+     * @brief Resolves the directory where Ultralight runtime DLLs and ICU assets reside
+     *        (%LOCALAPPDATA%\Nismara Companion\runtime).
+     */
+    std::filesystem::path GetCompanionRuntimeDirectory() const;
+
+    /**
+     * @brief Resolves the directory where compiled React + Tailwind web UI files reside
+     *        (%LOCALAPPDATA%\Nismara Companion\web-ui).
+     */
+    std::filesystem::path GetCompanionWebUIDirectory() const;
+
 private:
     ConfigManager();
     ~ConfigManager() = default;

@@ -214,6 +214,9 @@ fn create_companion_gatekeeper() -> CompanionGatekeeperGuard {
     let stop_flag = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop_flag);
 
+    // Ensure runtime & web-ui are synced to %LOCALAPPDATA%\Nismara Companion
+    sync_bundled_runtime_to_local_appdata();
+
     // Immediately write initial heartbeat files and refresh every 4 seconds
     write_heartbeat_files();
     std::thread::spawn(move || {
@@ -484,7 +487,135 @@ fn probe_game_directory(candidate: &Path, app_name: &str, exe_stem: &str) -> Opt
     None
 }
 
+fn copy_dir_recursive(src: &Path, dst: &Path) {
+    if !src.exists() {
+        return;
+    }
+    let _ = fs::create_dir_all(dst);
+    if let Ok(entries) = fs::read_dir(src) {
+        for entry in entries.flatten() {
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            if src_path.is_dir() {
+                copy_dir_recursive(&src_path, &dst_path);
+            } else {
+                let should_copy = match (fs::metadata(&src_path), fs::metadata(&dst_path)) {
+                    (Ok(s_meta), Ok(d_meta)) => {
+                        let newer = match (s_meta.modified(), d_meta.modified()) {
+                            (Ok(s_mod), Ok(d_mod)) => s_mod
+                                .duration_since(d_mod)
+                                .map(|d| d.as_secs() > 2)
+                                .unwrap_or(false),
+                            _ => false,
+                        };
+                        s_meta.len() != d_meta.len() || newer
+                    }
+                    (Ok(_), Err(_)) => true,
+                    _ => false,
+                };
+                if should_copy {
+                    let _ = fs::copy(&src_path, &dst_path);
+                }
+            }
+        }
+    }
+}
+
+/// Ensures %LOCALAPPDATA%\Nismara Companion\runtime & web-ui are always populated
+/// from the bundled resources directory, even if the user installed Nismara Companion
+/// to a custom drive or directory, or after deleting AppData for a fresh reinstall.
+fn sync_bundled_runtime_to_local_appdata() {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            let companion_appdata = PathBuf::from(local_appdata).join("Nismara Companion");
+            let _ = fs::create_dir_all(&companion_appdata);
+
+            if let Ok(exe_path) = std::env::current_exe() {
+                if let Some(exe_dir) = exe_path.parent() {
+                    // 1. Sync runtime (Ultralight WebKit)
+                    let runtime_candidates = [
+                        exe_dir.join("resources").join("runtime"),
+                        exe_dir.join("resources").join("resources").join("runtime"),
+                        exe_dir.join("runtime"),
+                        exe_dir.join("..").join("resources").join("runtime"),
+                        exe_dir.join("..").join("src-tauri").join("resources").join("runtime"),
+                    ];
+                    let target_runtime = companion_appdata.join("runtime");
+                    for cand in &runtime_candidates {
+                        if cand.exists() && cand != &target_runtime {
+                            copy_dir_recursive(cand, &target_runtime);
+                            break;
+                        }
+                    }
+
+                    // 2. Sync web-ui (React 19 Phone UI)
+                    let webui_candidates = [
+                        exe_dir.join("resources").join("web-ui"),
+                        exe_dir.join("resources").join("resources").join("web-ui"),
+                        exe_dir.join("web-ui"),
+                        exe_dir.join("..").join("resources").join("web-ui"),
+                        exe_dir.join("..").join("src-tauri").join("resources").join("web-ui"),
+                    ];
+                    let target_webui = companion_appdata.join("web-ui");
+                    for cand in &webui_candidates {
+                        if cand.exists() && cand != &target_webui {
+                            copy_dir_recursive(cand, &target_webui);
+                            break;
+                        }
+                    }
+
+                    // 3. Sync NismaraTracker.dll to %LOCALAPPDATA%\Nismara Companion\resources\
+                    let dll_candidates = [
+                        exe_dir.join("resources").join("NismaraTracker.dll"),
+                        exe_dir.join("resources").join("resources").join("NismaraTracker.dll"),
+                        exe_dir.join("NismaraTracker.dll"),
+                        exe_dir.join("..").join("resources").join("NismaraTracker.dll"),
+                        exe_dir.join("..").join("src-tauri").join("resources").join("NismaraTracker.dll"),
+                        exe_dir.join("..").join("bin").join("NismaraTracker.dll"),
+                        exe_dir.join("..").join("..").join("bin").join("NismaraTracker.dll"),
+                    ];
+                    let target_res = companion_appdata.join("resources");
+                    let target_dll = target_res.join("NismaraTracker.dll");
+                    for cand in &dll_candidates {
+                        if cand.exists() && cand != &target_dll {
+                            let _ = fs::create_dir_all(&target_res);
+                            let should_copy = match (fs::metadata(cand), fs::metadata(&target_dll)) {
+                                (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
+                                (Ok(_), Err(_)) => true,
+                                _ => false,
+                            };
+                            if should_copy {
+                                let _ = fs::copy(cand, &target_dll);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(parent) = exe_path.parent() {
+            let exe_candidates = [
+                parent.join("resources").join(binary_name),
+                parent.join("_up_").join("resources").join(binary_name),
+                parent.join(binary_name),
+                parent.join("..").join("resources").join(binary_name),
+                parent.join("..").join("bin").join(binary_name),
+            ];
+
+            for cand in &exe_candidates {
+                if cand.exists() {
+                    return Some(cand.clone());
+                }
+            }
+        }
+    }
+
     let candidate_sources = [
         PathBuf::from(format!("resources/{}", binary_name)),
         PathBuf::from(format!("_up_/resources/{}", binary_name)),
@@ -499,25 +630,6 @@ fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
     for cand in &candidate_sources {
         if cand.exists() {
             return Some(cand.clone());
-        }
-    }
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(parent) = exe_path.parent() {
-            let candidates = [
-                parent.join("resources").join(binary_name),
-                parent.join("_up_").join("resources").join(binary_name),
-                parent.join("_up_").join(binary_name),
-                parent.join(binary_name),
-                parent.join("..").join("resources").join(binary_name),
-                parent.join("..").join("bin").join(binary_name),
-            ];
-
-            for cand in &candidates {
-                if cand.exists() {
-                    return Some(cand.clone());
-                }
-            }
         }
     }
 
@@ -604,7 +716,14 @@ fn detect_games(
                 if let (Ok(src_meta), Ok(dst_meta)) =
                     (fs::metadata(&src), fs::metadata(&plugin_file))
                 {
-                    if src_meta.len() != dst_meta.len() {
+                    let is_newer = match (src_meta.modified(), dst_meta.modified()) {
+                        (Ok(s_mod), Ok(d_mod)) => s_mod
+                            .duration_since(d_mod)
+                            .map(|d| d.as_secs() > 2)
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if src_meta.len() != dst_meta.len() || is_newer {
                         plugin_outdated = true;
                     }
                 }
@@ -831,7 +950,7 @@ async fn get_system_status(
         );
 
         SystemStatus {
-            companion_version: "1.0.0".to_string(),
+            companion_version: env!("CARGO_PKG_VERSION").to_string(),
             os_platform: std::env::consts::OS.to_string(),
             steam_installed,
             steam_path: steam_path_str,

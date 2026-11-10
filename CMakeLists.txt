@@ -53,6 +53,7 @@ set(NISMARA_SOURCES
     src/hooks/wndproc_hook.cpp
     src/ui/texture_manager.cpp
     src/ui/tablet_gui.cpp
+    src/ui/web_surface_bridge.cpp
 )
 
 add_library(NismaraTracker SHARED
@@ -68,6 +69,11 @@ target_include_directories(NismaraTracker PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/backends
     ${CMAKE_CURRENT_SOURCE_DIR}/vendor/json
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/ultralight/include
+)
+
+target_link_directories(NismaraTracker PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/vendor/ultralight/lib
 )
 
 target_compile_definitions(NismaraTracker PRIVATE
@@ -76,6 +82,8 @@ target_compile_definitions(NismaraTracker PRIVATE
     _CRT_SECURE_NO_WARNINGS
     UNICODE
     _UNICODE
+    IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
+    NISMARA_VERSION="${PROJECT_VERSION}"
 )
 
 if(MSVC)
@@ -84,6 +92,12 @@ if(MSVC)
         /MP
         /EHsc
         /utf-8
+    )
+    target_link_options(NismaraTracker PRIVATE
+        "/DELAYLOAD:Ultralight.dll"
+        "/DELAYLOAD:UltralightCore.dll"
+        "/DELAYLOAD:WebCore.dll"
+        "/DELAYLOAD:AppCore.dll"
     )
 endif()
 
@@ -99,6 +113,11 @@ target_link_libraries(NismaraTracker PRIVATE
     iphlpapi.lib
     ws2_32.lib
     shell32.lib
+    delayimp.lib
+    Ultralight.lib
+    UltralightCore.lib
+    WebCore.lib
+    AppCore.lib
 )
 
 # Output NismaraTracker.dll directly into ${CMAKE_SOURCE_DIR}/bin/ across all configurations

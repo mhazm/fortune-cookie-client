@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+:root {
+  --spacing: 0.25rem;
+
+  /* Layer 1: Primitive Tokens */
+  --color-slate-950: #020617;
+  --color-slate-900: #0f172a;
+  --color-slate-800: #1e293b;
+  --color-slate-400: #94a3b8;
+  --color-slate-300: #cbd5e1;
+  --color-slate-50: #f8fafc;
+  --color-emerald-400: #34d399;
+  --color-amber-400: #fbbf24;
+  --color-sky-400: #38bdf8;
+  --color-rose-400: #fb7185;
+  --color-purple-400: #c084fc;
+
+  /* Layer 2: Semantic Tokens */
+  --surface-app: var(--color-slate-950);
+  --surface-card: rgba(15, 23, 42, 0.86);
+  --surface-card-elevated: rgba(30, 41, 59, 0.72);
+  --border-subtle: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text-primary: var(--color-slate-50);
+  --text-secondary: var(--color-slate-300);
+  --text-muted: var(--color-slate-400);
+
+  /* Layer 3: Typography Scale Tokens */
+  --font-sans: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Cascadia Mono", "Consolas", "Fira Code", monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Safe WebKit scrollbar hiding (never use display:none which breaks WebKit sub-scroll) */
+::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+  background: transparent;
+}
+
+.scroll-area {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: block;
+}
+
+/* Glassmorphism surface primitives */
+.ios-glass {
+  background: var(--surface-card);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+}
+
+.ios-glass-card {
+  background: var(--surface-card-elevated);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+}
+
+.ios-dock-glass {
+  background: rgba(22, 28, 45, 0.78);
+  backdrop-filter: blur(32px);
+  -webkit-backdrop-filter: blur(32px);
+  border: 1px solid var(--border-strong);
+  border-radius: 28px;
+}

@@ -48,7 +48,8 @@
     ],
     "resources": [
       "resources/NismaraTracker.dll",
-      "../resources/NismaraTracker.dll"
+      "resources/runtime/**/*",
+      "resources/web-ui/**/*"
     ]
   }
 }

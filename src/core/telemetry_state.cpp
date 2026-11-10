@@ -31,6 +31,31 @@ bool ContainsSubstringCaseInsensitive(const std::string& haystack, const std::st
     return h.find(n) != std::string::npos;
 }
 
+bool IsFleetAtsVehicle(const DriverFleetVehicle& f) {
+    const std::string gid = ToLowerAscii(f.game_id);
+    if (gid == "2" || gid == "ats" || gid == "amtrucks") {
+        return true;
+    }
+    const std::string ig = ToLowerAscii(f.in_game_id);
+    if (ig.find("westernstar") != std::string::npos ||
+        ig.find("mack.") != std::string::npos ||
+        ig.find("kenworth") != std::string::npos ||
+        ig.find("peterbilt") != std::string::npos ||
+        ig.find("freightliner") != std::string::npos ||
+        ig.find("international") != std::string::npos ||
+        ig.find("volvo.vnl") != std::string::npos ||
+        ig.find(".ats") != std::string::npos) {
+        return true;
+    }
+    return false;
+}
+
+bool IsFleetMatchingGame(const DriverFleetVehicle& f, const std::string& active_game_id) {
+    const std::string g = ToLowerAscii(active_game_id);
+    const bool is_ats_session = (g == "ats" || g == "amtrucks" || g == "2");
+    return IsFleetAtsVehicle(f) == is_ats_session;
+}
+
 } // namespace
 
 TelemetryState& TelemetryState::Instance() {
@@ -95,6 +120,9 @@ void TelemetryState::MatchActiveFleet() {
 
     for (size_t i = 0; i < acc.fleets.size(); ++i) {
         const auto& f = acc.fleets[i];
+        if (!IsFleetMatchingGame(f, snap.game_id)) {
+            continue;
+        }
         int score = 0;
         std::string reason;
 

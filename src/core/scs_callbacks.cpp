@@ -6,6 +6,7 @@
 #include "core/server_detector.hpp"
 #include "core/telemetry_state.hpp"
 #include "hooks/dx11_hook.hpp"
+#include "ui/tablet_gui.hpp"
 
 #include <windows.h>
 #include <algorithm>
@@ -143,7 +144,10 @@ SCSAPI_VOID OnChannelSpeed(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float mps = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float mps = value->value_float.value;
     static auto last_speed_sample = std::chrono::steady_clock::now();
     const auto now = std::chrono::steady_clock::now();
     const float dt = std::chrono::duration<float>(now - last_speed_sample).count();
@@ -171,7 +175,10 @@ SCSAPI_VOID OnChannelRpm(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float rpm = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float rpm = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([rpm](nismara::core::TelemetrySnapshot& s) {
         s.engine_rpm = rpm;
     });
@@ -182,7 +189,10 @@ SCSAPI_VOID OnChannelEngineGear(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const int32_t gear = (value && value->type == SCS_VALUE_TYPE_s32) ? value->value_s32.value : 0;
+    if (!value || value->type != SCS_VALUE_TYPE_s32) {
+        return;
+    }
+    const int32_t gear = value->value_s32.value;
     nismara::core::TelemetryState::Instance().Write([gear](nismara::core::TelemetrySnapshot& s) {
         s.current_gear = gear;
     });
@@ -193,7 +203,10 @@ SCSAPI_VOID OnChannelDisplayedGear(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const int32_t gear = (value && value->type == SCS_VALUE_TYPE_s32) ? value->value_s32.value : 0;
+    if (!value || value->type != SCS_VALUE_TYPE_s32) {
+        return;
+    }
+    const int32_t gear = value->value_s32.value;
     nismara::core::TelemetryState::Instance().Write([gear](nismara::core::TelemetrySnapshot& s) {
         s.displayed_gear = gear;
     });
@@ -204,7 +217,10 @@ SCSAPI_VOID OnChannelEngineEnabled(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool enabled = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool enabled = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([enabled](nismara::core::TelemetrySnapshot& s) {
         s.engine_running = enabled;
     });
@@ -215,7 +231,10 @@ SCSAPI_VOID OnChannelElectricEnabled(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool enabled = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool enabled = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([enabled](nismara::core::TelemetrySnapshot& s) {
         s.electric_enabled = enabled;
     });
@@ -226,7 +245,10 @@ SCSAPI_VOID OnChannelFuelAmount(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float liters = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float liters = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([liters](nismara::core::TelemetrySnapshot& s) {
         if (s.job_active && s.job_last_fuel_liters > 0.0f && liters < s.job_last_fuel_liters) {
             const float delta = s.job_last_fuel_liters - liters;
@@ -244,7 +266,10 @@ SCSAPI_VOID OnChannelFuelRange(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float range_km = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float range_km = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([range_km](nismara::core::TelemetrySnapshot& s) {
         s.fuel_range_km = range_km;
     });
@@ -255,7 +280,10 @@ SCSAPI_VOID OnChannelOdometer(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float odo = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float odo = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([odo](nismara::core::TelemetrySnapshot& s) {
         if (s.job_active && s.job_start_odometer_km <= 0.0f && odo > 0.0f) {
             s.job_start_odometer_km = odo;
@@ -269,7 +297,10 @@ SCSAPI_VOID OnChannelParkingBrake(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.parking_brake = active;
     });
@@ -280,7 +311,10 @@ SCSAPI_VOID OnChannelCruiseControl(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float cc_mps = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float cc_mps = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([cc_mps](nismara::core::TelemetrySnapshot& s) {
         s.cruise_control_kmh = std::fabs(cc_mps) * 3.6f;
     });
@@ -291,7 +325,10 @@ SCSAPI_VOID OnChannelMotorBrake(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.motor_brake = active;
     });
@@ -302,7 +339,10 @@ SCSAPI_VOID OnChannelRetarder(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const uint32_t level = (value && value->type == SCS_VALUE_TYPE_u32) ? value->value_u32.value : 0;
+    if (!value || value->type != SCS_VALUE_TYPE_u32) {
+        return;
+    }
+    const uint32_t level = value->value_u32.value;
     nismara::core::TelemetryState::Instance().Write([level](nismara::core::TelemetrySnapshot& s) {
         s.retarder_level = level;
     });
@@ -313,7 +353,10 @@ SCSAPI_VOID OnChannelHighBeam(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.light_high_beam = active;
     });
@@ -324,7 +367,10 @@ SCSAPI_VOID OnChannelHazard(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.hazard_warning = active;
     });
@@ -335,7 +381,10 @@ SCSAPI_VOID OnChannelDiffLock(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.differential_lock = active;
     });
@@ -346,7 +395,10 @@ SCSAPI_VOID OnChannelFuelWarning(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool active = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool active = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([active](nismara::core::TelemetrySnapshot& s) {
         s.fuel_warning = active;
     });
@@ -357,8 +409,11 @@ SCSAPI_VOID OnChannelFuelAvgConsumption(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
     // SCS fuel consumption is in liters per meter. Convert to L/100km: val * 100000.0f
-    const float val = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    const float val = value->value_float.value;
     const float l_per_100km = (val > 0.0f) ? (val * 100000.0f) : 0.0f;
     nismara::core::TelemetryState::Instance().Write([l_per_100km](nismara::core::TelemetrySnapshot& s) {
         s.fuel_avg_consumption = l_per_100km;
@@ -370,7 +425,10 @@ SCSAPI_VOID OnChannelSpeedLimit(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float limit_mps = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float limit_mps = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([limit_mps](nismara::core::TelemetrySnapshot& s) {
         s.speed_limit_kmh = std::fabs(limit_mps) * 3.6f;
     });
@@ -381,7 +439,10 @@ SCSAPI_VOID OnChannelOilTemp(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float temp_c = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float temp_c = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([temp_c](nismara::core::TelemetrySnapshot& s) {
         s.oil_temperature_c = temp_c;
     });
@@ -392,7 +453,10 @@ SCSAPI_VOID OnChannelWaterTemp(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float temp_c = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float temp_c = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([temp_c](nismara::core::TelemetrySnapshot& s) {
         s.water_temperature_c = temp_c;
     });
@@ -403,8 +467,11 @@ SCSAPI_VOID OnChannelBrakeAirPressure(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
     // SCS brake air pressure is in psi (or bar depending on game config)
-    const float psi = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    const float psi = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([psi](nismara::core::TelemetrySnapshot& s) {
         s.brake_air_pressure_psi = psi;
     });
@@ -415,7 +482,10 @@ SCSAPI_VOID OnChannelBatteryVoltage(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float v = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 24.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float v = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([v](nismara::core::TelemetrySnapshot& s) {
         s.battery_voltage = v;
     });
@@ -455,12 +525,10 @@ SCSAPI_VOID OnChannelWear(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    if (!name) {
+    if (!name || !value || value->type != SCS_VALUE_TYPE_float) {
         return;
     }
-    const float wear = (value && value->type == SCS_VALUE_TYPE_float)
-                           ? std::clamp(value->value_float.value, 0.0f, 1.0f)
-                           : 0.0f;
+    const float wear = std::clamp(value->value_float.value, 0.0f, 1.0f);
 
     nismara::core::TelemetryState::Instance().Write([name, wear](nismara::core::TelemetrySnapshot& s) {
         auto update_cumulative = [&s](float current_w, float& prev_w, float& accum_w) {
@@ -527,7 +595,10 @@ SCSAPI_VOID OnChannelTrailerConnected(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const bool connected = (value && value->type == SCS_VALUE_TYPE_bool) ? (value->value_bool.value != 0) : false;
+    if (!value || value->type != SCS_VALUE_TYPE_bool) {
+        return;
+    }
+    const bool connected = (value->value_bool.value != 0);
     nismara::core::TelemetryState::Instance().Write([connected](nismara::core::TelemetrySnapshot& s) {
         s.trailer_connected = connected;
         if (!connected) {
@@ -547,7 +618,10 @@ SCSAPI_VOID OnChannelGameTime(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const uint32_t game_time = (value && value->type == SCS_VALUE_TYPE_u32) ? value->value_u32.value : 0;
+    if (!value || value->type != SCS_VALUE_TYPE_u32) {
+        return;
+    }
+    const uint32_t game_time = value->value_u32.value;
     static auto last_time_sample = std::chrono::steady_clock::now();
     const auto now = std::chrono::steady_clock::now();
     const float dt_wall = std::chrono::duration<float>(now - last_time_sample).count();
@@ -571,7 +645,10 @@ SCSAPI_VOID OnChannelNextRestStop(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const int32_t rest_min = (value && value->type == SCS_VALUE_TYPE_s32) ? value->value_s32.value : 0;
+    if (!value || value->type != SCS_VALUE_TYPE_s32) {
+        return;
+    }
+    const int32_t rest_min = value->value_s32.value;
     nismara::core::TelemetryState::Instance().Write([rest_min](nismara::core::TelemetrySnapshot& s) {
         if (s.job_active && rest_min < 0) {
             const int32_t overdue = -rest_min;
@@ -587,7 +664,10 @@ SCSAPI_VOID OnChannelNavigationDistance(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float nav_dist_m = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 0.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float nav_dist_m = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([nav_dist_m](nismara::core::TelemetrySnapshot& s) {
         s.navigation_distance_m = std::max(0.0f, nav_dist_m);
     });
@@ -598,7 +678,10 @@ SCSAPI_VOID OnChannelLocalScale(
     const scs_u32_t /*index*/,
     const scs_value_t* const value,
     const scs_context_t /*context*/) {
-    const float scale = (value && value->type == SCS_VALUE_TYPE_float) ? value->value_float.value : 1.0f;
+    if (!value || value->type != SCS_VALUE_TYPE_float) {
+        return;
+    }
+    const float scale = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([scale](nismara::core::TelemetrySnapshot& s) {
         s.local_scale = scale;
     });
@@ -608,6 +691,54 @@ SCSAPI_VOID OnChannelLocalScale(
 // Telemetry Event Callbacks
 // ============================================================================
 
+SCSAPI_VOID OnTelemetryFrameStart(
+    const scs_event_t event,
+    const void* const event_info,
+    const scs_context_t /*context*/) {
+    if (event != SCS_TELEMETRY_EVENT_frame_start || !event_info) {
+        return;
+    }
+    const auto* frame = static_cast<const scs_telemetry_frame_start_t*>(event_info);
+
+    static scs_timestamp_t last_sim_time = 0;
+    static auto last_advance_tp = std::chrono::steady_clock::now();
+    const auto now = std::chrono::steady_clock::now();
+
+    bool sim_advanced = false;
+    if (frame->paused_simulation_time != 0 && frame->paused_simulation_time != last_sim_time) {
+        last_sim_time = frame->paused_simulation_time;
+        last_advance_tp = now;
+        sim_advanced = true;
+    } else {
+        const float elapsed_sec = std::chrono::duration<float>(now - last_advance_tp).count();
+        if (elapsed_sec < 0.25f && last_sim_time != 0) {
+            sim_advanced = true;
+        }
+    }
+
+    nismara::core::TelemetryState::Instance().Write([sim_advanced](nismara::core::TelemetrySnapshot& s) {
+        // Driver is strictly in-world driving only if:
+        // 1. Simulation clock is ticking (not paused, not in loading screen)
+        // 2. Pause event is false
+        // 3. Truck model is actively loaded
+        // 4. In-game world time is running (> 0)
+        // 5. Position in the world map is valid (not in main menu showroom)
+        const bool in_world = sim_advanced &&
+                              !s.is_paused &&
+                              !s.truck_in_game_id.empty() &&
+                              s.game_time_minutes > 0 &&
+                              (std::abs(s.pos_x) > 1.0 || std::abs(s.pos_z) > 1.0);
+
+        if (s.is_driving_in_world != in_world) {
+            s.is_driving_in_world = in_world;
+            if (!in_world && nismara::ui::TabletGui::Instance().IsVisible()) {
+                nismara::ui::TabletGui::Instance().SetVisible(false);
+                nismara::hooks::Dx11Hook::Instance().OnOverlayVisibilityChanged(false);
+            }
+        }
+    });
+}
+
 SCSAPI_VOID OnTelemetryPause(
     const scs_event_t event,
     const void* const /*event_info*/,
@@ -615,7 +746,17 @@ SCSAPI_VOID OnTelemetryPause(
     const bool paused = (event == SCS_TELEMETRY_EVENT_paused);
     nismara::core::TelemetryState::Instance().Write([paused](nismara::core::TelemetrySnapshot& s) {
         s.is_paused = paused;
+        if (paused) {
+            s.is_driving_in_world = false;
+        }
     });
+
+    if (paused) {
+        if (nismara::ui::TabletGui::Instance().IsVisible()) {
+            nismara::ui::TabletGui::Instance().SetVisible(false);
+            nismara::hooks::Dx11Hook::Instance().OnOverlayVisibilityChanged(false);
+        }
+    }
 }
 
 SCSAPI_VOID OnTelemetryConfiguration(
@@ -641,6 +782,11 @@ SCSAPI_VOID OnTelemetryConfiguration(
         const uint32_t wheels = GetU32Attribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_wheel_count, 4);
         const float fuel_cap = GetFloatAttribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_fuel_capacity, 0.0f);
         const float rpm_lim = GetFloatAttribute(*info, SCS_TELEMETRY_CONFIG_ATTRIBUTE_rpm_limit, 2500.0f);
+
+        // Do not overwrite existing truck data with empty strings from menu showroom
+        if (model_id.empty() && brand.empty() && name.empty()) {
+            return;
+        }
 
         std::string canonical_in_game_id;
         if (!model_id.empty()) {
@@ -668,6 +814,11 @@ SCSAPI_VOID OnTelemetryConfiguration(
         });
 
         nismara::core::TelemetryState::Instance().MatchActiveFleet();
+
+        const auto acc_check = nismara::core::TelemetryState::Instance().GetDriverAccount();
+        if (acc_check.fleets.empty() && !nismara::core::ConfigManager::Instance().GetConfig().driver_token.empty()) {
+            nismara::core::ApiClient::Instance().SyncAccountAsync();
+        }
 
         LogToGame(
             SCS_LOG_TYPE_message,
@@ -1035,15 +1186,7 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
             nismara::hooks::Dx11Hook::Instance().StartAsync();
         } catch (...) {}
 
-        // Auto-sync account only if Nismara Companion is actively running in background
-        try {
-            if (nismara::core::IsCompanionAppRunning() &&
-                !nismara::core::ConfigManager::Instance().GetConfig().driver_token.empty()) {
-                nismara::core::ApiClient::Instance().SyncAccountAsync();
-            }
-        } catch (...) {}
-
-        // Store game identity & engine version
+        // Store game identity & engine version first
         const std::string game_id = version_params->common.game_id ? version_params->common.game_id : "unknown";
         const std::string game_name = version_params->common.game_name ? version_params->common.game_name : "SCS Game";
         const uint32_t major_ver = SCS_GET_MAJOR_VERSION(version_params->common.game_version);
@@ -1058,6 +1201,13 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
             s.is_paused = true;
         });
 
+        // Auto-sync driver account if token is present
+        try {
+            if (!nismara::core::ConfigManager::Instance().GetConfig().driver_token.empty()) {
+                nismara::core::ApiClient::Instance().SyncAccountAsync();
+            }
+        } catch (...) {}
+
         // Start background Server & Multiplayer Detector (Singleplayer / Convoy / TruckersMP / HaulMP)
         try {
             nismara::core::ServerDetector::Instance().Initialize();
@@ -1065,6 +1215,7 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
 
         // Register core lifecycle & configuration events
         const bool events_ok =
+            (version_params->register_for_event(SCS_TELEMETRY_EVENT_frame_start, OnTelemetryFrameStart, nullptr) == SCS_RESULT_ok) &&
             (version_params->register_for_event(SCS_TELEMETRY_EVENT_paused, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
             (version_params->register_for_event(SCS_TELEMETRY_EVENT_started, OnTelemetryPause, nullptr) == SCS_RESULT_ok) &&
             (version_params->register_for_event(SCS_TELEMETRY_EVENT_configuration, OnTelemetryConfiguration, nullptr) == SCS_RESULT_ok);
@@ -1081,7 +1232,7 @@ SCSAPI_RESULT scs_telemetry_init(const scs_u32_t version, const scs_telemetry_in
         }
 
         // Register periodic channels for truck mechanical metrics, world position, and wear
-        const scs_u32_t flags = SCS_TELEMETRY_CHANNEL_FLAG_no_value;
+        const scs_u32_t flags = SCS_TELEMETRY_CHANNEL_FLAG_none;
 
         version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_speed, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelSpeed, nullptr);
         version_params->register_for_channel(SCS_TELEMETRY_TRUCK_CHANNEL_engine_rpm, SCS_U32_NIL, SCS_VALUE_TYPE_float, flags, OnChannelRpm, nullptr);
@@ -1173,6 +1324,8 @@ SCSAPI_VOID scs_telemetry_shutdown(void) {
     try {
         LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] Shutting down telemetry session.");
         nismara::core::ServerDetector::Instance().Shutdown();
+        nismara::hooks::Dx11Hook::Instance().Shutdown();
+        nismara::core::ApiClient::Instance().Shutdown();
         g_game_log = nullptr;
         nismara::core::TelemetryState::Instance().Reset();
     } catch (...) {}

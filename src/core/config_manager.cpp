@@ -26,8 +26,7 @@ std::string NormalizeBaseUrl(const std::string& url) {
     while (!cleaned.empty() && cleaned.back() == '/') {
         cleaned.pop_back();
     }
-    // Automatically upgrade empty or legacy development endpoints to official production server
-    if (cleaned.empty() || cleaned == "http://localhost:3100" || cleaned == "http://localhost:3000" || cleaned == "http://127.0.0.1:3100") {
+    if (cleaned.empty()) {
         return DEFAULT_PRODUCTION_API_URL;
     }
     return cleaned;
@@ -235,7 +234,7 @@ bool ConfigManager::Save() const {
         return false;
     }
 
-    file << "# Nismara OS iPhone 16 Simulation Unit Configuration\n";
+    file << "# Nismara Companion Configuration\n";
     file << "driver_token=" << config_.driver_token << "\n";
     file << "api_base_url=" << config_.api_base_url << "\n";
     file << "steam_id=" << config_.steam_id << "\n";
@@ -308,6 +307,42 @@ std::filesystem::path ConfigManager::GetGameUserDataDirectory() const {
 std::filesystem::path ConfigManager::GetHeartbeatFilePath() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return heartbeat_path_;
+}
+
+std::filesystem::path ConfigManager::GetCompanionRuntimeDirectory() const {
+    wchar_t local_app_data[MAX_PATH] = {0};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, MAX_PATH) > 0) {
+        const std::filesystem::path base = std::filesystem::path(local_app_data) / L"Nismara Companion";
+        std::error_code ec;
+        const auto res_runtime = base / L"resources" / L"runtime";
+        if (std::filesystem::exists(res_runtime / L"Ultralight.dll", ec)) {
+            return res_runtime;
+        }
+        const auto direct_runtime = base / L"runtime";
+        if (std::filesystem::exists(direct_runtime / L"Ultralight.dll", ec)) {
+            return direct_runtime;
+        }
+        return direct_runtime;
+    }
+    return {};
+}
+
+std::filesystem::path ConfigManager::GetCompanionWebUIDirectory() const {
+    wchar_t local_app_data[MAX_PATH] = {0};
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data, MAX_PATH) > 0) {
+        const std::filesystem::path base = std::filesystem::path(local_app_data) / L"Nismara Companion";
+        std::error_code ec;
+        const auto res_webui = base / L"resources" / L"web-ui";
+        if (std::filesystem::exists(res_webui / L"index.html", ec)) {
+            return res_webui;
+        }
+        const auto direct_webui = base / L"web-ui";
+        if (std::filesystem::exists(direct_webui / L"index.html", ec)) {
+            return direct_webui;
+        }
+        return direct_webui;
+    }
+    return {};
 }
 
 } // namespace nismara::core

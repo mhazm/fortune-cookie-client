@@ -50,6 +50,12 @@ public:
      */
     void OnOverlayVisibilityChanged(bool visible);
 
+    /**
+     * @brief Called on WM_DEVICECHANGE when a joystick/controller is plugged or unplugged
+     *        so cached DirectInput8 pointers are invalidated safely.
+     */
+    void OnDeviceChange();
+
     ID3D11Device* GetDevice() const noexcept { return device_; }
     ID3D11DeviceContext* GetContext() const noexcept { return context_; }
 
@@ -70,6 +76,8 @@ private:
     void CleanupRenderTarget();
 
     static bool IsMouseDevice(IDirectInputDevice8W* device);
+    static void MarkNonMouseDevice(IDirectInputDevice8W* device);
+    static bool IsKnownNonMouseDevice(IDirectInputDevice8W* device);
 
     // DirectX 11 Detours
     static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* swap_chain, UINT sync_interval, UINT flags);
@@ -109,10 +117,14 @@ private:
     ID3D11RenderTargetView* main_rtv_{nullptr};
     HWND game_hwnd_{nullptr};
 
+    static constexpr size_t kMaxCachedNonMouseDevices = 16;
     std::atomic<IDirectInputDevice8W*> active_mouse_device_{nullptr};
+    std::atomic<IDirectInputDevice8W*> non_mouse_devices_[kMaxCachedNonMouseDevices]{};
+    std::atomic<ULONGLONG> last_device_change_tick_{0};
     std::atomic<bool> mouse_unacquired_for_overlay_{false};
     POINT saved_overlay_cursor_pos_{-1, -1};
     bool last_frame_visible_{false};
+    bool web_bridge_init_attempted_{false};
 
     std::thread worker_thread_{};
     std::atomic<bool> started_{false};

@@ -77,14 +77,32 @@ void WndProcHook::Shutdown() {
 LRESULT CALLBACK WndProcHook::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     auto& self = WndProcHook::Instance();
 
+    // On hardware device hotplug (joystick/gamepad/wheel connected or disconnected),
+    // immediately clear cached DirectInput pointers and pass straight to the game
+    // without letting ImGui poll XInput/DirectInput during ETS2's [di8] enumeration.
+    if (uMsg == WM_DEVICECHANGE) {
+        Dx11Hook::Instance().OnDeviceChange();
+        return SafeCallWindowProc(self.original_wndproc_, self.is_unicode_, hWnd, uMsg, wParam, lParam);
+    }
+
     // Check toggle hotkey (Default: VK_F11) on key-down without auto-repeat
     if (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN) {
         const int hotkey_vk = nismara::core::ConfigManager::Instance().GetConfig().toggle_hotkey_vk;
         const bool is_repeat = (lParam & (1LL << 30)) != 0;
         if (static_cast<int>(wParam) == hotkey_vk && !is_repeat) {
-            // Gatekeeper: Only toggle phone if Nismara Companion App is running in the background!
+            // Gatekeeper 1: Only toggle phone if Nismara Companion App is running in the background!
             // If Companion is not active, pressing F11 does nothing.
             if (!nismara::core::IsCompanionAppRunning()) {
+                if (nismara::ui::TabletGui::Instance().IsVisible()) {
+                    nismara::ui::TabletGui::Instance().SetVisible(false);
+                    Dx11Hook::Instance().OnOverlayVisibilityChanged(false);
+                }
+                return 0;
+            }
+
+            // Gatekeeper 2: Strictly restrict phone toggle to active truck cabin driving sessions!
+            // Disallowed in Main Menu, Loading Screens, or when Paused.
+            if (!nismara::core::TelemetryState::Instance().IsInCabinDrivingSession()) {
                 if (nismara::ui::TabletGui::Instance().IsVisible()) {
                     nismara::ui::TabletGui::Instance().SetVisible(false);
                     Dx11Hook::Instance().OnOverlayVisibilityChanged(false);
@@ -104,6 +122,14 @@ LRESULT CALLBACK WndProcHook::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                 }
             }
             return 0;
+        }
+    }
+
+    // On focus loss (Alt+Tab, Windows key, task switch), automatically close overlay
+    if ((uMsg == WM_ACTIVATE && LOWORD(wParam) == WA_INACTIVE) || uMsg == WM_KILLFOCUS) {
+        if (nismara::ui::TabletGui::Instance().IsVisible()) {
+            nismara::ui::TabletGui::Instance().SetVisible(false);
+            Dx11Hook::Instance().OnOverlayVisibilityChanged(false);
         }
     }
 
@@ -135,7 +161,7 @@ LRESULT CALLBACK WndProcHook::HookedWndProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             case WM_SETCURSOR:
                 return 1;
 
-            // Suppress keyboard messages when typing in ImGui inputs (e.g. Driver Token)
+            // Suppress keyboard messages when typing in ImGui inputs
             case WM_KEYDOWN:
             case WM_KEYUP:
             case WM_SYSKEYDOWN:

@@ -1,0 +1,27 @@
+{
+  "name": "nismara-phone-ui",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "deploy:local": "npm run build && powershell -NoProfile -Command \"$dest = \\\"$env:LOCALAPPDATA\\Nismara Companion\\resources\\web-ui\\\"; New-Item -ItemType Directory -Force -Path $dest | Out-Null; Copy-Item -Recurse -Force dist/* $dest; Write-Host 'Deployed to LocalAppData/Nismara Companion/resources/web-ui successfully'\""
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.4",
+    "lucide-react": "^1.68.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "tailwindcss": "^4.3.4"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^6.0.2",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}
+

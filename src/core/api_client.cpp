@@ -37,6 +37,17 @@ std::string GetLocalTimeString() {
     return buf;
 }
 
+void LogDebugToFile(const std::string& msg) {
+    try {
+        const auto dir = ConfigManager::Instance().GetGameUserDataDirectory();
+        if (dir.empty()) return;
+        std::ofstream ofs(dir / "nismara_tracker_debug.log", std::ios::app);
+        if (ofs.is_open()) {
+            ofs << "[" << GetLocalTimeString() << "] " << msg << "\n";
+        }
+    } catch (...) {}
+}
+
 std::string GuessExtensionFromUrl(const std::string& url) {
     const auto qpos = url.find('?');
     const std::string clean = (qpos == std::string::npos) ? url : url.substr(0, qpos);
@@ -781,7 +792,8 @@ void ApiClient::ExecuteSyncWorker(
 
     try {
         const std::string full_url = base_url + "/api/tracker/me";
-    const std::wstring wide_url = Utf8ToWide(full_url);
+        LogDebugToFile("ExecuteSyncWorker connecting to: " + full_url);
+        const std::wstring wide_url = Utf8ToWide(full_url);
 
     URL_COMPONENTS url_comp = {};
     url_comp.dwStructSize = sizeof(url_comp);
@@ -915,8 +927,11 @@ void ApiClient::ExecuteSyncWorker(
     WinHttpCloseHandle(h_connect);
     WinHttpCloseHandle(h_session);
 
+    LogDebugToFile("ExecuteSyncWorker received response: HTTP " + std::to_string(status_code) + ", bytes=" + std::to_string(response_body.size()));
+
     const auto parsed = nlohmann::json::parse(response_body, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) {
+        LogDebugToFile("ExecuteSyncWorker failed to parse JSON response!");
         TelemetryState::Instance().WriteDriverAccount([status_code](DriverAccountProfile& acc) {
             acc.status = AccountSyncStatus::NetworkError;
             acc.status_message =
@@ -1038,14 +1053,72 @@ void ApiClient::ExecuteSyncWorker(
             acc.garage.status = g.value("status", "operational");
             acc.garage.fleet_slot = g.value("fleetSlot", 1);
             acc.garage.fleet_slot_used = g.value("fleetSlotUsed", 0);
-            acc.garage.fleet_slot_level = g.value("fleetSlotLevel", 1);
+            acc.garage.fleet_slot_level = g.value("fleetSlotLevel", acc.garage.fleet_slot);
             acc.garage.fuel_stock = g.value("fuelStock", 0.0);
             acc.garage.fuel_capacity = g.value("fuelCapacity", 2000.0);
-            acc.garage.fuel_tank_level = g.value("fuelTankLevel", 1);
+            const int32_t derived_fuel_level = std::max(
+                1, static_cast<int32_t>(std::round((acc.garage.fuel_capacity - 1000.0) / 1000.0)));
+            acc.garage.fuel_tank_level = g.value("fuelTankLevel", derived_fuel_level);
             acc.garage.safebox_stock = g.value("safeboxStock", 0);
             acc.garage.safebox_level = g.value("safeboxLevel", 1);
             acc.garage.max_penalty_tickets = g.value("maxPenaltyTickets", 10 + (acc.garage.safebox_level - 1) * 5);
-            acc.garage.operational_cost = g.value("operationalCost", 0.0);
+
+            // Calculate exact Nismara operational cost fallbacks when server response omits them
+            double fallback_fleet_op = 0.0;
+            for (int32_t i = 2; i <= acc.garage.fleet_slot_level; ++i) {
+                const int32_t tier = (i - 1) / 3;
+                fallback_fleet_op += 250.0 + (tier * 250.0);
+            }
+            double fallback_fuel_op = 0.0;
+            for (int32_t i = 2; i <= acc.garage.fuel_tank_level; ++i) {
+                const int32_t tier = (i - 1) / 5;
+                fallback_fuel_op += 200.0 + (tier * 100.0);
+            }
+            double fallback_safebox_op = 0.0;
+            for (int32_t i = 2; i <= acc.garage.safebox_level; ++i) {
+                const int32_t tier = (i - 2) / 3;
+                fallback_safebox_op += 250.0 + (tier * 150.0);
+            }
+
+            if (g.contains("fleet_operational_cost") && g["fleet_operational_cost"].is_number()) {
+                acc.garage.fleet_operational_cost = g["fleet_operational_cost"].get<double>();
+            } else if (g.contains("fleetOperationalCost") && g["fleetOperationalCost"].is_number()) {
+                acc.garage.fleet_operational_cost = g["fleetOperationalCost"].get<double>();
+            } else {
+                acc.garage.fleet_operational_cost = fallback_fleet_op;
+            }
+
+            if (g.contains("fuel_operational_cost") && g["fuel_operational_cost"].is_number()) {
+                acc.garage.fuel_operational_cost = g["fuel_operational_cost"].get<double>();
+            } else if (g.contains("fuelOperationalCost") && g["fuelOperationalCost"].is_number()) {
+                acc.garage.fuel_operational_cost = g["fuelOperationalCost"].get<double>();
+            } else {
+                acc.garage.fuel_operational_cost = fallback_fuel_op;
+            }
+
+            if (g.contains("safebox_operational_cost") && g["safebox_operational_cost"].is_number()) {
+                acc.garage.safebox_operational_cost = g["safebox_operational_cost"].get<double>();
+            } else if (g.contains("safeboxOperationalCost") && g["safeboxOperationalCost"].is_number()) {
+                acc.garage.safebox_operational_cost = g["safeboxOperationalCost"].get<double>();
+            } else {
+                acc.garage.safebox_operational_cost = fallback_safebox_op;
+            }
+
+            const double fallback_total_op =
+                acc.garage.fleet_operational_cost + acc.garage.fuel_operational_cost + acc.garage.safebox_operational_cost;
+            if (g.contains("operational_cost") && g["operational_cost"].is_number()) {
+                acc.garage.operational_cost = g["operational_cost"].get<double>();
+            } else if (g.contains("operationalCost") && g["operationalCost"].is_number()) {
+                acc.garage.operational_cost = g["operationalCost"].get<double>();
+            } else {
+                acc.garage.operational_cost = fallback_total_op;
+            }
+
+            if (g.contains("next_payment_date") && g["next_payment_date"].is_string()) {
+                acc.garage.next_payment_date = g["next_payment_date"].get<std::string>();
+            } else if (g.contains("nextPaymentDate") && g["nextPaymentDate"].is_string()) {
+                acc.garage.next_payment_date = g["nextPaymentDate"].get<std::string>();
+            }
         }
 
         acc.fleets.clear();
@@ -1065,13 +1138,31 @@ void ApiClient::ExecuteSyncWorker(
                 fv.wheels = item.value("wheels", "4x2");
                 fv.status = item.value("status", "active");
                 fv.has_insurance = item.value("hasInsurance", false);
-                fv.maintenance_needed = item.value("maintenanceNeeded", false);
+                fv.maintenance_needed =
+                    item.value("maintenanceNeeded", item.value("maintenance_needed", false));
                 fv.is_assigned_driver = item.value("isAssignedDriver", true);
                 fv.in_game_id = item.value("inGameId", "");
                 fv.model_name = item.value("modelName", "");
                 fv.model_type = item.value("modelType", "truck");
                 fv.photo_url = item.value("photoUrl", "");
                 fv.brand_name = item.value("brandName", "");
+
+                if (item.contains("maintenanceStartDate") && item["maintenanceStartDate"].is_string()) {
+                    fv.maintenance_start_date = item["maintenanceStartDate"].get<std::string>();
+                } else if (item.contains("maintenance_start_date") && item["maintenance_start_date"].is_string()) {
+                    fv.maintenance_start_date = item["maintenance_start_date"].get<std::string>();
+                }
+
+                if (item.contains("maintenanceEndDate") && item["maintenanceEndDate"].is_string()) {
+                    fv.maintenance_end_date = item["maintenanceEndDate"].get<std::string>();
+                } else if (item.contains("maintenance_end_date") && item["maintenance_end_date"].is_string()) {
+                    fv.maintenance_end_date = item["maintenance_end_date"].get<std::string>();
+                }
+
+                fv.jobs_count = item.value("jobsCount", item.value("jobs_count", 0));
+                fv.total_revenue = item.value("totalRevenue", item.value("total_revenue", 0.0));
+                fv.total_fuel_used = item.value("totalFuelUsed", item.value("total_fuel_used", 0.0));
+                fv.total_damage_cost = item.value("totalDamageCost", item.value("total_damage_cost", 0.0));
 
                 if (item.contains("wear") && item["wear"].is_object()) {
                     const auto& w = item["wear"];
@@ -1087,6 +1178,20 @@ void ApiClient::ExecuteSyncWorker(
                     fv.maint_tires = m.value("tires", 20000.0);
                     fv.maint_transmission = m.value("transmission", 70000.0);
                     fv.maint_brakes = m.value("brakes", 35000.0);
+                }
+
+                if (item.contains("lastMaintenance") && item["lastMaintenance"].is_object()) {
+                    const auto& lm = item["lastMaintenance"];
+                    fv.last_maint_engine = lm.value("engine", 0.0);
+                    fv.last_maint_tires = lm.value("tires", 0.0);
+                    fv.last_maint_transmission = lm.value("transmission", 0.0);
+                    fv.last_maint_brakes = lm.value("brakes", 0.0);
+                } else if (item.contains("last_maintenance") && item["last_maintenance"].is_object()) {
+                    const auto& lm = item["last_maintenance"];
+                    fv.last_maint_engine = lm.value("engine", 0.0);
+                    fv.last_maint_tires = lm.value("tires", 0.0);
+                    fv.last_maint_transmission = lm.value("transmission", 0.0);
+                    fv.last_maint_brakes = lm.value("brakes", 0.0);
                 }
 
                 acc.fleets.push_back(std::move(fv));
@@ -1113,7 +1218,21 @@ void ApiClient::ExecuteSyncWorker(
 
     // Immediately match the driver's synced fleets against the currently driven in-game vehicle
     TelemetryState::Instance().MatchActiveFleet();
+
+    const auto acc_check = TelemetryState::Instance().GetDriverAccount();
+    LogDebugToFile("ExecuteSyncWorker finished: driver='" + acc_check.name +
+                   "', fleets=" + std::to_string(acc_check.fleets.size()) +
+                   ", garage.has=" + (acc_check.garage.has_garage ? "1" : "0") +
+                   ", garage.slots=" + std::to_string(acc_check.garage.fleet_slot) +
+                   ", garage.fuel=" + std::to_string(acc_check.garage.fuel_stock));
+    } catch (const std::exception& ex) {
+        LogDebugToFile(std::string("ExecuteSyncWorker std::exception: ") + ex.what());
+        TelemetryState::Instance().WriteDriverAccount([&ex](DriverAccountProfile& acc) {
+            acc.status = AccountSyncStatus::NetworkError;
+            acc.status_message = std::string("Sync Error: ") + ex.what();
+        });
     } catch (...) {
+        LogDebugToFile("ExecuteSyncWorker unknown exception caught");
         TelemetryState::Instance().WriteDriverAccount([](DriverAccountProfile& acc) {
             acc.status = AccountSyncStatus::NetworkError;
             acc.status_message = "Unexpected error while synchronizing profile.";

@@ -1,5 +1,6 @@
 #include "ui/tablet_gui.hpp"
 #include "ui/texture_manager.hpp"
+#include "ui/web_surface_bridge.hpp"
 #include "hooks/dx11_hook.hpp"
 #include "core/api_client.hpp"
 #include "core/companion_gate.hpp"
@@ -32,9 +33,9 @@ struct PhoneFramePalette {
 };
 
 constexpr PhoneFramePalette kFramePalettes[5] = {
-    // 0: Ultramarine (Exact match to IPhone_16_Vector.svg: #525ca8, #414888, #a2ade5, #b7bbda, #363c71)
+    // 0: Ultramarine
     {
-        "Ultramarine (iPhone 16)",
+        "Ultramarine",
         IM_COL32(82, 92, 168, 255),
         IM_COL32(65, 72, 136, 255),
         IM_COL32(162, 173, 229, 235),
@@ -64,7 +65,7 @@ constexpr PhoneFramePalette kFramePalettes[5] = {
     },
     // 3: Teal
     {
-        "Teal (iPhone 16)",
+        "Teal",
         IM_COL32(58, 112, 112, 255),
         IM_COL32(40, 82, 82, 255),
         IM_COL32(130, 188, 188, 235),
@@ -74,7 +75,7 @@ constexpr PhoneFramePalette kFramePalettes[5] = {
     },
     // 4: Rose Pink
     {
-        "Pink (iPhone 16)",
+        "Rose Pink",
         IM_COL32(184, 106, 128, 255),
         IM_COL32(140, 74, 94, 255),
         IM_COL32(232, 168, 186, 235),
@@ -90,7 +91,7 @@ struct PresetWallpaperItem {
 };
 
 constexpr PresetWallpaperItem kPresetWallpapers[5] = {
-    {"preset:ultramarine", "iOS 18 Ultramarine"},
+    {"preset:ultramarine", "Nismara Ultramarine"},
     {"preset:midnight",    "Midnight Titanium"},
     {"preset:gold",        "Nismara Executive Gold"},
     {"preset:cyberpunk",   "Cyberpunk Night"},
@@ -570,7 +571,9 @@ TabletGui::TabletGui() = default;
 
 void TabletGui::ToggleVisible() {
     const bool now_visible = !visible_.load();
+    visible_.store(now_visible);
     if (now_visible) {
+        open_seq_.fetch_add(1);
         const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
         if (cfg.auto_lock_on_close) {
             screen_state_ = PhoneScreenState::LockScreen;
@@ -578,11 +581,12 @@ void TabletGui::ToggleVisible() {
             unlocking_in_progress_ = false;
         }
     }
-    visible_.store(now_visible);
 }
 
 void TabletGui::SetVisible(bool visible) noexcept {
-    if (visible && !visible_.load()) {
+    visible_.store(visible);
+    if (visible) {
+        open_seq_.fetch_add(1);
         const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
         if (cfg.auto_lock_on_close) {
             screen_state_ = PhoneScreenState::LockScreen;
@@ -590,7 +594,6 @@ void TabletGui::SetVisible(bool visible) noexcept {
             unlocking_in_progress_ = false;
         }
     }
-    visible_.store(visible);
 }
 
 void TabletGui::LockPhone() noexcept {
@@ -760,6 +763,9 @@ void TabletGui::Render() {
         }
     }
 
+    const auto snap = nismara::core::TelemetryState::Instance().GetSnapshot();
+    const auto account = nismara::core::TelemetryState::Instance().GetDriverAccount();
+
     hover_pill_text_.clear();
 
     if (!config_loaded_) {
@@ -775,25 +781,24 @@ void TabletGui::Render() {
         const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
         lockscreen_wallpaper_spec_ = cfg.lockscreen_wallpaper;
         homescreen_wallpaper_spec_ = cfg.homescreen_wallpaper;
+        frame_color_idx_ = std::clamp(cfg.phone_frame_color, 0, 4);
+        auto_lock_on_close_ = cfg.auto_lock_on_close;
     }
 
     // Ensure preset or custom wallpaper DX11 textures are ready
     TextureManager::Instance().SyncTextures(lockscreen_wallpaper_spec_, homescreen_wallpaper_spec_);
 
-    const auto snap = nismara::core::TelemetryState::Instance().GetSnapshot();
-    const auto account = nismara::core::TelemetryState::Instance().GetDriverAccount();
-
-    // iPhone 16 proportional dimensions (360:730 ratio from IPhone_16_Vector.svg -> 392 x 794 px)
+    // Base iPhone 16 dimensions (360:730 ratio -> 392 x 794 px)
     constexpr float kPhoneWidth = 392.0f;
     constexpr float kPhoneHeight = 794.0f;
 
     ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 win_pos(
+        io.DisplaySize.x - kPhoneWidth - 48.0f,
+        (io.DisplaySize.y - kPhoneHeight) * 0.5f);
+
     ImGui::SetNextWindowSize(ImVec2(kPhoneWidth, kPhoneHeight), ImGuiCond_Always);
-    if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
-        ImGui::SetNextWindowPos(
-            ImVec2(io.DisplaySize.x - kPhoneWidth - 48.0f, (io.DisplaySize.y - kPhoneHeight) * 0.5f),
-            ImGuiCond_FirstUseEver);
-    }
+    ImGui::SetNextWindowPos(win_pos, ImGuiCond_Always);
 
     constexpr ImGuiWindowFlags window_flags =
         ImGuiWindowFlags_NoTitleBar |
@@ -803,17 +808,15 @@ void TabletGui::Render() {
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBackground;
 
-    if (ImGui::Begin("NISMARA iPhone 16 OS", nullptr, window_flags)) {
+    if (ImGui::Begin("Nismara Companion Phone", nullptr, window_flags)) {
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
-        const ImVec2 win_pos = ImGui::GetWindowPos();
-        const ImVec2 win_size = ImGui::GetWindowSize();
 
         // 1. Render iPhone 16 Backplate & Physical Side Buttons
-        RenderPhoneBackplate(draw_list, win_pos, win_size, frame_color_idx_);
+        RenderPhoneBackplate(draw_list, win_pos, ImVec2(kPhoneWidth, kPhoneHeight), frame_color_idx_);
 
-        // Inner OLED Screen Bounds (matching rect14 in IPhone_16_Vector.svg)
+        // Inner OLED Screen Bounds (matching rect14 in IPhone_16_Vector.svg: 350 x 758 px, offset 21,18)
         const ImVec2 screen_min(win_pos.x + 21.0f, win_pos.y + 18.0f);
-        const ImVec2 screen_max(win_pos.x + win_size.x - 21.0f, win_pos.y + win_size.y - 18.0f);
+        const ImVec2 screen_max(win_pos.x + kPhoneWidth - 21.0f, win_pos.y + kPhoneHeight - 18.0f);
 
         // Advance unlock animation if triggered
         if (unlocking_in_progress_) {
@@ -823,32 +826,78 @@ void TabletGui::Render() {
             }
         }
 
-        // 2. Render Rounded Screen Wallpaper (AddImageRounded with 46px corner radius -> zero corner bleeding!)
+        // 2. Render Rounded Screen: Ultralight React + Tailwind OS or Native ImGui Fallback
         draw_list->PushClipRect(screen_min, screen_max, true);
 
-        if (screen_state_ == PhoneScreenState::LockScreen) {
-            // 1. NATIVE LOCK SCREEN (Giant Clock, Date, Widgets, Notification Card, Wallpaper)
-            RenderScreenWallpaper(draw_list, screen_min, screen_max, true);
-            RenderLockScreen(draw_list, screen_min, screen_max, snap, account);
-            RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
-            RenderHomeIndicatorBar(draw_list, screen_min, screen_max, true);
-        } else if (screen_state_ == PhoneScreenState::HomeScreen) {
-            // 2. NATIVE HOME SCREEN (Wallpapers, Smart Driver Widget, 8 App Icons, Frosted Dock)
-            RenderScreenWallpaper(draw_list, screen_min, screen_max, false);
-            RenderHomeScreen(draw_list, screen_min, screen_max, snap, account);
-            RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
-            RenderHomeIndicatorBar(draw_list, screen_min, screen_max, false);
+        auto& web_bridge = WebSurfaceBridge::Instance();
+        if (web_bridge.IsReady()) {
+            // Forward mouse input directly to the Web Surface
+            const ImVec2 mouse_pos = io.MousePos;
+            const bool is_hovered = (mouse_pos.x >= screen_min.x && mouse_pos.x < screen_max.x &&
+                                     mouse_pos.y >= screen_min.y && mouse_pos.y < screen_max.y);
+
+            if (is_hovered) {
+                const int local_x = static_cast<int>(mouse_pos.x - screen_min.x);
+                const int local_y = static_cast<int>(mouse_pos.y - screen_min.y);
+
+                web_bridge.FireMouseMove(local_x, local_y);
+
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    web_bridge.FireMouseDown(local_x, local_y, 0);
+                }
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                    web_bridge.FireMouseUp(local_x, local_y, 0);
+                }
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                    web_bridge.FireMouseDown(local_x, local_y, 2);
+                }
+                if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+                    web_bridge.FireMouseUp(local_x, local_y, 2);
+                }
+
+                if (io.MouseWheel != 0.0f) {
+                    web_bridge.FireMouseScroll(static_cast<int>(io.MouseWheel * 40.0f));
+                }
+            }
+
+            // Render high-fidelity React + Tailwind UI texture with exact 46px corner radius
+            ID3D11ShaderResourceView* web_srv = web_bridge.GetTextureSRV();
+            if (web_srv != nullptr) {
+                draw_list->AddImageRounded(
+                    reinterpret_cast<ImTextureID>(web_srv),
+                    screen_min,
+                    screen_max,
+                    ImVec2(0.0f, 0.0f),
+                    ImVec2(1.0f, 1.0f),
+                    IM_COL32_WHITE,
+                    46.0f);
+            }
         } else {
-            // 3. NATIVE IMGUI APP VIEW (Telemetry, Waybill, Nismara ID, Garage, Penalty, Wallpapers, Settings)
-            RenderScreenWallpaper(draw_list, screen_min, screen_max, false);
-            draw_list->AddRectFilled(
-                screen_min,
-                screen_max,
-                IM_COL32(8, 11, 20, 228),
-                46.0f);
-            RenderActiveAppView(draw_list, screen_min, screen_max, snap, account);
-            RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
-            RenderHomeIndicatorBar(draw_list, screen_min, screen_max, false);
+            // NATIVE IMGUI SCREENS FALLBACK (when Web-UI or Ultralight runtime is missing)
+            if (screen_state_ == PhoneScreenState::LockScreen) {
+                // 1. NATIVE LOCK SCREEN (Giant Clock, Date, Widgets, Notification Card, Wallpaper)
+                RenderScreenWallpaper(draw_list, screen_min, screen_max, true);
+                RenderLockScreen(draw_list, screen_min, screen_max, snap, account);
+                RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
+                RenderHomeIndicatorBar(draw_list, screen_min, screen_max, true);
+            } else if (screen_state_ == PhoneScreenState::HomeScreen) {
+                // 2. NATIVE HOME SCREEN (Wallpapers, Smart Driver Widget, 8 App Icons, Frosted Dock)
+                RenderScreenWallpaper(draw_list, screen_min, screen_max, false);
+                RenderHomeScreen(draw_list, screen_min, screen_max, snap, account);
+                RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
+                RenderHomeIndicatorBar(draw_list, screen_min, screen_max, false);
+            } else {
+                // 3. NATIVE IMGUI APP VIEW (Telemetry, Waybill, Nismara ID, Garage, Penalty, Wallpapers, Settings)
+                RenderScreenWallpaper(draw_list, screen_min, screen_max, false);
+                draw_list->AddRectFilled(
+                    screen_min,
+                    screen_max,
+                    IM_COL32(8, 11, 20, 228),
+                    46.0f);
+                RenderActiveAppView(draw_list, screen_min, screen_max, snap, account);
+                RenderStatusBarAndDynamicIsland(draw_list, screen_min, screen_max, snap, account);
+                RenderHomeIndicatorBar(draw_list, screen_min, screen_max, false);
+            }
         }
 
         // Render mandatory version update alert banner if client is outdated
@@ -866,8 +915,7 @@ void TabletGui::Render() {
         draw_list->PopClipRect();
 
         // 3. Render Hardware Bezel Ring & Titanium/Ultramarine Frame Overlay ON TOP OF the screen perimeter
-        //    so no pixel inside the screen can ever spill outside the iPhone frame!
-        RenderPhoneBezelOverlay(draw_list, win_pos, win_size, frame_color_idx_);
+        RenderPhoneBezelOverlay(draw_list, win_pos, ImVec2(kPhoneWidth, kPhoneHeight), frame_color_idx_);
 
         // 4. Render Centered iOS Hover Pill Tooltip (if any icon/button is hovered)
         RenderActiveHoverPill(draw_list);
