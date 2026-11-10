@@ -521,19 +521,30 @@ fn copy_dir_recursive(src: &Path, dst: &Path) {
     }
 }
 
-/// Ensures %LOCALAPPDATA%\Nismara Companion\runtime & web-ui are always populated
-/// from the bundled resources directory, even if the user installed Nismara Companion
-/// to a custom drive or directory, or after deleting AppData for a fresh reinstall.
+/// Ensures %LOCALAPPDATA%\Nismara Companion\resources\ (runtime, web-ui, NismaraTracker.dll) are always populated
+/// directly inside the resources/ directory, without duplicating files outside resources/.
+/// Also cleans up any legacy unbundled runtime/ and web-ui/ directories in the install root.
 fn sync_bundled_runtime_to_local_appdata() {
     #[cfg(target_os = "windows")]
     {
         if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
             let companion_appdata = PathBuf::from(local_appdata).join("Nismara Companion");
-            let _ = fs::create_dir_all(&companion_appdata);
+            let target_res = companion_appdata.join("resources");
+            let _ = fs::create_dir_all(&target_res);
+
+            // Clean up legacy redundant runtime/ & web-ui/ folders in install root if any exist
+            let legacy_runtime = companion_appdata.join("runtime");
+            if legacy_runtime.exists() {
+                let _ = fs::remove_dir_all(&legacy_runtime);
+            }
+            let legacy_webui = companion_appdata.join("web-ui");
+            if legacy_webui.exists() {
+                let _ = fs::remove_dir_all(&legacy_webui);
+            }
 
             if let Ok(exe_path) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_path.parent() {
-                    // 1. Sync runtime (Ultralight WebKit)
+                    // 1. Sync runtime (Ultralight WebKit) into resources/runtime
                     let runtime_candidates = [
                         exe_dir.join("resources").join("runtime"),
                         exe_dir.join("resources").join("resources").join("runtime"),
@@ -541,15 +552,17 @@ fn sync_bundled_runtime_to_local_appdata() {
                         exe_dir.join("..").join("resources").join("runtime"),
                         exe_dir.join("..").join("src-tauri").join("resources").join("runtime"),
                     ];
-                    let target_runtime = companion_appdata.join("runtime");
+                    let target_runtime = target_res.join("runtime");
                     for cand in &runtime_candidates {
                         if cand.exists() && cand != &target_runtime {
-                            copy_dir_recursive(cand, &target_runtime);
+                            if !target_runtime.exists() {
+                                copy_dir_recursive(cand, &target_runtime);
+                            }
                             break;
                         }
                     }
 
-                    // 2. Sync web-ui (React 19 Phone UI)
+                    // 2. Sync web-ui (React 19 Phone UI) into resources/web-ui
                     let webui_candidates = [
                         exe_dir.join("resources").join("web-ui"),
                         exe_dir.join("resources").join("resources").join("web-ui"),
@@ -557,10 +570,12 @@ fn sync_bundled_runtime_to_local_appdata() {
                         exe_dir.join("..").join("resources").join("web-ui"),
                         exe_dir.join("..").join("src-tauri").join("resources").join("web-ui"),
                     ];
-                    let target_webui = companion_appdata.join("web-ui");
+                    let target_webui = target_res.join("web-ui");
                     for cand in &webui_candidates {
                         if cand.exists() && cand != &target_webui {
-                            copy_dir_recursive(cand, &target_webui);
+                            if !target_webui.exists() {
+                                copy_dir_recursive(cand, &target_webui);
+                            }
                             break;
                         }
                     }
@@ -575,11 +590,9 @@ fn sync_bundled_runtime_to_local_appdata() {
                         exe_dir.join("..").join("bin").join("NismaraTracker.dll"),
                         exe_dir.join("..").join("..").join("bin").join("NismaraTracker.dll"),
                     ];
-                    let target_res = companion_appdata.join("resources");
                     let target_dll = target_res.join("NismaraTracker.dll");
                     for cand in &dll_candidates {
                         if cand.exists() && cand != &target_dll {
-                            let _ = fs::create_dir_all(&target_res);
                             let should_copy = match (fs::metadata(cand), fs::metadata(&target_dll)) {
                                 (Ok(s_meta), Ok(d_meta)) => s_meta.len() != d_meta.len(),
                                 (Ok(_), Err(_)) => true,

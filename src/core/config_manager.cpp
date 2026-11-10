@@ -322,7 +322,7 @@ std::filesystem::path ConfigManager::GetCompanionRuntimeDirectory() const {
         if (std::filesystem::exists(direct_runtime / L"Ultralight.dll", ec)) {
             return direct_runtime;
         }
-        return direct_runtime;
+        return res_runtime;
     }
     return {};
 }
@@ -340,7 +340,7 @@ std::filesystem::path ConfigManager::GetCompanionWebUIDirectory() const {
         if (std::filesystem::exists(direct_webui / L"index.html", ec)) {
             return direct_webui;
         }
-        return direct_webui;
+        return res_webui;
     }
     return {};
 }
