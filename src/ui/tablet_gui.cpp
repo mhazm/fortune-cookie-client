@@ -572,6 +572,7 @@ TabletGui::TabletGui() = default;
 void TabletGui::ToggleVisible() {
     const bool now_visible = !visible_.load();
     visible_.store(now_visible);
+    is_dragging_phone_ = false;
     if (now_visible) {
         open_seq_.fetch_add(1);
         const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
@@ -585,6 +586,7 @@ void TabletGui::ToggleVisible() {
 
 void TabletGui::SetVisible(bool visible) noexcept {
     visible_.store(visible);
+    is_dragging_phone_ = false;
     if (visible) {
         open_seq_.fetch_add(1);
         const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
@@ -793,12 +795,29 @@ void TabletGui::Render() {
     constexpr float kPhoneHeight = 794.0f;
 
     ImGuiIO& io = ImGui::GetIO();
-    const ImVec2 win_pos(
-        io.DisplaySize.x - kPhoneWidth - 48.0f,
-        (io.DisplaySize.y - kPhoneHeight) * 0.5f);
+
+    // 1. Initialize phone position from persistent config or default right-side alignment
+    if (phone_pos_.x < 0.0f || phone_pos_.y < 0.0f) {
+        const auto cfg = nismara::core::ConfigManager::Instance().GetConfig();
+        if (cfg.phone_pos_x >= 0.0f && cfg.phone_pos_y >= 0.0f) {
+            phone_pos_.x = cfg.phone_pos_x;
+            phone_pos_.y = cfg.phone_pos_y;
+        } else {
+            phone_pos_.x = io.DisplaySize.x - kPhoneWidth - 48.0f;
+            phone_pos_.y = (io.DisplaySize.y - kPhoneHeight) * 0.5f;
+        }
+    }
+
+    // Keep phone completely inside current display viewport
+    const float min_x = 0.0f;
+    const float max_x = std::max(0.0f, io.DisplaySize.x - kPhoneWidth);
+    const float min_y = 0.0f;
+    const float max_y = std::max(0.0f, io.DisplaySize.y - kPhoneHeight);
+    phone_pos_.x = std::clamp(phone_pos_.x, min_x, max_x);
+    phone_pos_.y = std::clamp(phone_pos_.y, min_y, max_y);
 
     ImGui::SetNextWindowSize(ImVec2(kPhoneWidth, kPhoneHeight), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(win_pos, ImGuiCond_Always);
+    ImGui::SetNextWindowPos(phone_pos_, ImGuiCond_Always);
 
     constexpr ImGuiWindowFlags window_flags =
         ImGuiWindowFlags_NoTitleBar |
@@ -810,13 +829,58 @@ void TabletGui::Render() {
 
     if (ImGui::Begin("Nismara Companion Phone", nullptr, window_flags)) {
         ImDrawList* draw_list = ImGui::GetWindowDrawList();
+        const ImVec2 win_pos = ImGui::GetWindowPos();
+        const ImVec2 win_size = ImGui::GetWindowSize();
 
         // 1. Render iPhone 16 Backplate & Physical Side Buttons
-        RenderPhoneBackplate(draw_list, win_pos, ImVec2(kPhoneWidth, kPhoneHeight), frame_color_idx_);
+        RenderPhoneBackplate(draw_list, win_pos, win_size, frame_color_idx_);
 
         // Inner OLED Screen Bounds (matching rect14 in IPhone_16_Vector.svg: 350 x 758 px, offset 21,18)
         const ImVec2 screen_min(win_pos.x + 21.0f, win_pos.y + 18.0f);
         const ImVec2 screen_max(win_pos.x + kPhoneWidth - 21.0f, win_pos.y + kPhoneHeight - 18.0f);
+
+        // Interactive Phone Dragging Logic (Issue #1 fix)
+        const ImVec2 mouse_pos = io.MousePos;
+        const bool in_phone_bounds = (mouse_pos.x >= win_pos.x && mouse_pos.x <= win_pos.x + win_size.x &&
+                                      mouse_pos.y >= win_pos.y && mouse_pos.y <= win_pos.y + win_size.y);
+        const bool in_screen_bounds = (mouse_pos.x >= screen_min.x && mouse_pos.x < screen_max.x &&
+                                       mouse_pos.y >= screen_min.y && mouse_pos.y < screen_max.y);
+
+        // Power button area on right side (preserve clickability)
+        const float right_btn_x0 = win_pos.x + win_size.x - 6.0f;
+        const float right_btn_x1 = win_pos.x + win_size.x - 1.0f;
+        const ImVec2 pwr_min(right_btn_x0 - 4.0f, win_pos.y + 236.0f);
+        const ImVec2 pwr_max(right_btn_x1 + 4.0f, win_pos.y + 328.0f);
+        const bool is_over_power_btn = (mouse_pos.x >= pwr_min.x && mouse_pos.x <= pwr_max.x &&
+                                        mouse_pos.y >= pwr_min.y && mouse_pos.y <= pwr_max.y);
+
+        // Allow dragging by:
+        // - Entire physical outer titanium bezel (outside screen bounds, excluding power button)
+        // - Top status bar corners (left & right 105px of top 26px in screen, excluding Dynamic Island)
+        const bool is_top_corner_drag = (in_screen_bounds && mouse_pos.y <= screen_min.y + 26.0f &&
+                                         (mouse_pos.x <= screen_min.x + 105.0f || mouse_pos.x >= screen_max.x - 105.0f));
+        const bool can_drag_here = (in_phone_bounds && !in_screen_bounds && !is_over_power_btn) || is_top_corner_drag;
+
+        if (is_dragging_phone_) {
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                phone_pos_.x = mouse_pos.x - drag_offset_.x;
+                phone_pos_.y = mouse_pos.y - drag_offset_.y;
+                phone_pos_.x = std::clamp(phone_pos_.x, min_x, max_x);
+                phone_pos_.y = std::clamp(phone_pos_.y, min_y, max_y);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            } else {
+                is_dragging_phone_ = false;
+                auto& cfg_mgr = nismara::core::ConfigManager::Instance();
+                cfg_mgr.UpdatePhonePosition(phone_pos_.x, phone_pos_.y);
+                cfg_mgr.Save();
+            }
+        } else if (can_drag_here) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                is_dragging_phone_ = true;
+                drag_offset_ = ImVec2(mouse_pos.x - phone_pos_.x, mouse_pos.y - phone_pos_.y);
+            }
+        }
 
         // Advance unlock animation if triggered
         if (unlocking_in_progress_) {
@@ -832,9 +896,7 @@ void TabletGui::Render() {
         auto& web_bridge = WebSurfaceBridge::Instance();
         if (web_bridge.IsReady()) {
             // Forward mouse input directly to the Web Surface
-            const ImVec2 mouse_pos = io.MousePos;
-            const bool is_hovered = (mouse_pos.x >= screen_min.x && mouse_pos.x < screen_max.x &&
-                                     mouse_pos.y >= screen_min.y && mouse_pos.y < screen_max.y);
+            const bool is_hovered = in_screen_bounds && !is_dragging_phone_ && !is_top_corner_drag;
 
             if (is_hovered) {
                 const int local_x = static_cast<int>(mouse_pos.x - screen_min.x);

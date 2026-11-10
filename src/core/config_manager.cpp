@@ -217,6 +217,18 @@ bool ConfigManager::Load() {
             }
         } else if (key == "auto_lock_on_close") {
             config_.auto_lock_on_close = (value == "1" || value == "true");
+        } else if (key == "phone_pos_x") {
+            try {
+                config_.phone_pos_x = std::stof(value);
+            } catch (...) {
+                config_.phone_pos_x = -1.0f;
+            }
+        } else if (key == "phone_pos_y") {
+            try {
+                config_.phone_pos_y = std::stof(value);
+            } catch (...) {
+                config_.phone_pos_y = -1.0f;
+            }
         }
     }
 
@@ -244,9 +256,17 @@ bool ConfigManager::Save() const {
     file << "homescreen_wallpaper=" << config_.homescreen_wallpaper << "\n";
     file << "phone_frame_color=" << config_.phone_frame_color << "\n";
     file << "auto_lock_on_close=" << (config_.auto_lock_on_close ? 1 : 0) << "\n";
+    file << "phone_pos_x=" << config_.phone_pos_x << "\n";
+    file << "phone_pos_y=" << config_.phone_pos_y << "\n";
     file.flush();
 
     return file.good();
+}
+
+void ConfigManager::UpdatePhonePosition(float x, float y) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    config_.phone_pos_x = x;
+    config_.phone_pos_y = y;
 }
 
 PluginConfig ConfigManager::GetConfig() const {

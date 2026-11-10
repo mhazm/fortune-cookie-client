@@ -20,6 +20,10 @@ struct PluginConfig {
     std::string homescreen_wallpaper{"preset:midnight"};
     int phone_frame_color{0}; // 0: Ultramarine (SVG Default), 1: Black Titanium, 2: Natural Titanium, 3: Teal, 4: Pink
     bool auto_lock_on_close{true}; // Always start at Lock Screen when opened with F11
+
+    // Draggable Phone Position on Screen (-1.0f indicates default alignment)
+    float phone_pos_x{-1.0f};
+    float phone_pos_y{-1.0f};
 };
 
 /**
@@ -42,6 +46,11 @@ public:
      * @brief Persists current configuration to nismara_config.dat.
      */
     bool Save() const;
+
+    /**
+     * @brief Thread-safe update of saved phone overlay position.
+     */
+    void UpdatePhonePosition(float x, float y);
 
     /**
      * @brief Thread-safe getter for current configuration.

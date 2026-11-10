@@ -185,6 +185,11 @@ private:
     ImFont* font_large_num_{nullptr};
     ImFont* font_clock_{nullptr};
 
+    // Dragging and window positioning state
+    ImVec2 phone_pos_{-1.0f, -1.0f};
+    bool is_dragging_phone_{false};
+    ImVec2 drag_offset_{0.0f, 0.0f};
+
     // Custom Centered iOS Hover Pill state
     std::string hover_pill_text_{};
     float hover_pill_cx_{0.0f};
