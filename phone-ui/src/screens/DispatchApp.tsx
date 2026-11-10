@@ -48,9 +48,13 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
   const accumTruckDmg = (telemetry.job_accum_vehicle_damage ?? 0) * 100;
   const accumTrailerDmg = (telemetry.job_accum_trailer_damage ?? 0) * 100;
 
+  const isAts = telemetry.game_id === 'ats' || telemetry.game_id === 'amtrucks' || telemetry.game_id === '2';
+  const realMilesSpeedLimit = isAts ? 129 : 100; // 80 mph (~128.75 km/h) for ATS, 100 km/h for ETS2
+  const invalidSpeedLimit = isAts ? 210 : 180;   // 130 mph (~209.2 km/h) for ATS, 180 km/h for ETS2
+
   const topSpeedKmh = Math.round(telemetry.job_max_speed_kmh || 0);
-  const isInvalidSpeed = topSpeedKmh > 180;
-  const isRaceMiles = topSpeedKmh > 100 && topSpeedKmh <= 180;
+  const isInvalidSpeed = topSpeedKmh > invalidSpeedLimit;
+  const isRaceMiles = topSpeedKmh > realMilesSpeedLimit && topSpeedKmh <= invalidSpeedLimit;
 
   const fuelUsedL = telemetry.job_fuel_consumed_liters || 0;
   const avgLPer100Km = drivenKm > 5 ? (fuelUsedL / drivenKm) * 100 : 0;
@@ -70,6 +74,8 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
   const allCvarsOk = passedCvars === 9 && !telemetry.hc_forbidden_mods_found;
 
   const hcDisqualified =
+    Boolean(telemetry.hardcore_disqualified) ||
+    telemetry.hardcore_eligible_at_start === false ||
     Boolean(telemetry.hardcore_auto_park_used) ||
     Boolean(telemetry.hardcore_warp_detected) ||
     Boolean(telemetry.hc_forbidden_mods_found) ||
@@ -760,10 +766,10 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
                       }}
                     >
                       {isInvalidSpeed
-                        ? 'INVALID (>180)'
+                        ? `INVALID (>${isAts ? '130 mph' : '180 km/h'})`
                         : isRaceMiles
-                        ? 'RACE MILES (>100)'
-                        : 'REAL MILES (≤100)'}
+                        ? `RACE MILES (>${isAts ? '80 mph' : '100 km/h'})`
+                        : `REAL MILES (≤${isAts ? '80 mph' : '100 km/h'})`}
                     </span>
                   </div>
 
@@ -846,7 +852,7 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
                           marginTop: 1,
                         }}
                       >
-                        {topSpeedKmh} km/h
+                        {topSpeedKmh} km/h {isAts ? `(${Math.round(topSpeedKmh / 1.609344)} mph)` : ''}
                       </div>
                       <div style={{ fontSize: 8, color: '#64748b' }}>
                         Overspeed: {Math.round(telemetry.hardcore_speeding_seconds || 0)}s
@@ -943,9 +949,35 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
                         ) : (
                           <AlertTriangle size={11} color="#fbbf24" />
                         )}
-                        <span>Real Miles (≤100)</span>
+                        <span>Real Miles ({isAts ? '≤80 mph' : '≤100 km/h'})</span>
                       </div>
                     </div>
+
+                    {hcDisqualified && (
+                      <div
+                        style={{
+                          backgroundColor: 'rgba(239, 68, 68, 0.12)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          borderRadius: 6,
+                          padding: '4px 8px',
+                          fontSize: 9,
+                          color: '#fca5a5',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 5,
+                        }}
+                      >
+                        <AlertTriangle size={12} color="#f87171" style={{ flexShrink: 0 }} />
+                        <span>
+                          {telemetry.hardcore_disqualify_reason ||
+                            (telemetry.hardcore_eligible_at_start === false
+                              ? 'Pengaturan awal tidak memenuhi kriteria Hardcore'
+                              : isInvalidSpeed
+                              ? `Kecepatan melebihi batas Real Miles (${isAts ? '80 mph / 129 km/h' : '100 km/h'})`
+                              : 'Diskualifikasi simulasi Hardcore')}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </>

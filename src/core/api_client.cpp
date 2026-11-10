@@ -202,7 +202,20 @@ void ApiClient::PostJobStartAsync(const JobStartRequest& req) {
         {"vehicleBrand", req.vehicle_brand},
         {"vehicleModel", req.vehicle_model},
         {"vehicleInGameId", req.vehicle_in_game_id},
-        {"fleetNumber", req.fleet_number}
+        {"fleetNumber", req.fleet_number},
+        {"hasForbiddenMods", req.has_forbidden_mods},
+        {"forbiddenModsSummary", req.forbidden_mods_summary},
+        {"hardcoreSettings", {
+            {"trafficOk", req.hc_traffic_ok},
+            {"fatigueOk", req.hc_fatigue_ok},
+            {"policeOk", req.hc_police_ok},
+            {"parkingOk", req.hc_parking_ok},
+            {"roadEventsOk", req.hc_road_events_ok},
+            {"rainProbOk", req.hc_rain_prob_ok},
+            {"advancedCouplingOk", req.hc_advanced_coupling_ok},
+            {"fuelSimOk", req.hc_fuel_simulation_ok},
+            {"airBrakeOk", req.hc_air_brake_ok}
+        }}
     };
 
     std::lock_guard<std::mutex> lock(thread_mutex_);
@@ -256,6 +269,9 @@ void ApiClient::PostJobCompleteAsync(const JobCompleteRequest& req) {
         {"isHardcore", req.is_hardcore},
         {"hardcoreRating", req.hardcore_rating},
         {"isHardcoreEligible", req.is_hardcore_eligible},
+        {"isHardcoreEligibleAtStart", req.is_hardcore_eligible_at_start},
+        {"hardcoreDisqualifiedDuringTrip", req.hardcore_disqualified_during_trip},
+        {"hardcoreMidTripReason", req.hardcore_mid_trip_reason},
         {"speedingSeconds", req.speeding_seconds},
         {"restOverdueMinutes", req.rest_overdue_minutes},
         {"isLate", req.is_late},
@@ -678,12 +694,21 @@ void ApiClient::ExecuteJobPostWorker(
         const double locked_price = data.value("lockedCargoPrice", 1.5);
         const bool is_special = data.value("isSpecialContract", false);
         const bool resumed = data.value("resumed", false);
+        const bool hc_start_ok = data.value("isHardcoreEligibleAtStart", true);
+        const std::string hc_reason = data.value("hardcoreDisqualifyReason", "");
 
         TelemetryState::Instance().Write([&](TelemetrySnapshot& s) {
             s.active_job_db_id = job_id;
             s.active_job_locked_price = locked_price;
             s.active_job_is_special = is_special;
             s.active_job_sync_status = (resumed ? "Resumed Job #" : "Recording Job #") + job_id;
+            s.hardcore_eligible_at_start = hc_start_ok;
+            if (!hc_start_ok) {
+                s.hardcore_disqualified = true;
+                if (!hc_reason.empty()) {
+                    s.hardcore_disqualify_reason = hc_reason;
+                }
+            }
         });
     } else if (event_kind == "complete") {
         const std::string job_id = data.value("jobId", "");

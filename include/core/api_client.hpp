@@ -26,6 +26,19 @@ struct JobStartRequest {
     std::string vehicle_model{};
     std::string vehicle_in_game_id{};
     std::string fleet_number{};
+
+    // Initial Hardcore Simulation & Anti-Cheat Validation at Start
+    bool has_forbidden_mods{false};
+    std::string forbidden_mods_summary{};
+    bool hc_traffic_ok{false};
+    bool hc_fatigue_ok{false};
+    bool hc_police_ok{false};
+    bool hc_parking_ok{false};
+    bool hc_road_events_ok{false};
+    bool hc_rain_prob_ok{false};
+    bool hc_advanced_coupling_ok{false};
+    bool hc_fuel_simulation_ok{false};
+    bool hc_air_brake_ok{false};
 };
 
 struct JobCompleteRequest {
@@ -43,6 +56,9 @@ struct JobCompleteRequest {
     bool is_hardcore{false};
     float hardcore_rating{5.0f};
     bool is_hardcore_eligible{false};
+    bool is_hardcore_eligible_at_start{true};
+    bool hardcore_disqualified_during_trip{false};
+    std::string hardcore_mid_trip_reason{};
     float speeding_seconds{0.0f};
     int32_t rest_overdue_minutes{0};
     bool is_late{false};

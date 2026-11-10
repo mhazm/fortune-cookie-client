@@ -118,6 +118,9 @@ export interface TelemetryData {
   hardcore_rest_overdue_minutes?: number;
   hardcore_auto_park_used?: boolean;
   hardcore_warp_detected?: boolean;
+  hardcore_eligible_at_start?: boolean;
+  hardcore_disqualified?: boolean;
+  hardcore_disqualify_reason?: string;
 
   has_last_job_receipt?: boolean;
   last_receipt_job_id?: string;

@@ -365,14 +365,37 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
    7. `g_trailer_advanced_coupling = 1` (Advanced Trailer Coupling = Yes).
    8. `g_fuel_economy = 1` (Realistic Fuel Consumption = Yes).
    9. `g_air_brake = 1` (Air Brakes Simulation = Yes).
-3. **Kategori Kecepatan Mengemudi (Speed Classification)**:
-   - **Real Miles** ($\le 100\text{ km/h}$): Kecepatan simulasi realistis standar VTC Nismara Transport. Memenuhi syarat Hardcore Points dan tanpa penalti kecepatan.
-   - **Race Miles** ($> 100\text{ km/h}$ dan $\le 180\text{ km/h}$): Melebihi batas kecepatan simulasi. Dikenakan penalti `+2` Poin Pelanggaran (`pointhistories`), pembatalan bonus Distance & Mass (`-100%`), dan diskualifikasi rating Hardcore.
-   - **Invalid Stats** ($> 180\text{ km/h}$): Kecepatan tidak wajar / manipulasi physics / warping. Dikenakan penalti berat `+5` Poin Pelanggaran, pembatalan reward Hardcore total, dan rating otomatis 0 bintang.
+3. **Kategori Kecepatan Mengemudi (Speed Classification — ETS2 vs ATS)**:
+   - Sesuai standar simulasi realistis VTC Nismara Transport dan model `JobHistory` (`lib/models/JobHistory.ts`), klasifikasi kecepatan dibedakan secara adil sesuai game yang sedang dimainkan:
+     - **Euro Truck Simulator 2 (`eut2` / `gameId: "1"`)**:
+       - **Real Miles** ($\le 100\text{ km/h}$ / $\approx 62.1\text{ mph}$): Kecepatan reguler standar jalan tol Eropa. Memenuhi syarat bonus Hardcore.
+       - **Race Miles** ($> 100\text{ km/h}$ dan $\le 180\text{ km/h}$): Melebihi batas aman realistis. Dikenakan penalti `+2` Poin Pelanggaran (`pointhistories`), pembatalan bonus Distance & Mass (`-100%`), dan diskualifikasi rating Hardcore.
+       - **Invalid Stats** ($> 180\text{ km/h}$ / $> 111.8\text{ mph}$): Kecepatan tidak wajar / glitch physics. Dikenakan penalti berat `+5` Poin Pelanggaran dan rating otomatis 0 bintang.
+     - **American Truck Simulator (`amtrucks` / `gameId: "2"`)**:
+       - **Real Miles** ($\le 80\text{ mph}$ / $\le 128.75\text{ km/h}$): Kecepatan reguler jalan tol Interstate AS (Texas, Utah, Montana, Nevada). Memenuhi syarat bonus Hardcore.
+       - **Race Miles** ($> 80\text{ mph}$ dan $\le 130\text{ mph}$ / $> 128.75\text{ km/h}$ dan $\le 209.2\text{ km/h}$): Kecepatan balap truk. Dikenakan penalti `+2` Poin Pelanggaran, pembatalan bonus Distance & Mass (`-100%`), dan diskualifikasi rating Hardcore.
+       - **Invalid Stats** ($> 130\text{ mph}$ / $> 209.2\text{ km/h}$): Manipulasi physics / speedhack. Dikenakan penalti berat `+5` Poin Pelanggaran dan rating otomatis 0 bintang.
+   - **Simetri Headroom Safety**: Kedua game memiliki buffer keselamatan kecepatan Race Miles yang seimbang yaitu sebesar $+80\text{ km/h}$ ($+50\text{ mph}$) di atas batas Real Miles sebelum dikategorikan sebagai Invalid Stats.
 
-4. **Kriteria Validasi Kelayakan Hardcore (Semua Wajib Terpenuhi)**:
+4. **Kriteria Validasi Kelayakan Hardcore & 3-Pillar Integrity Model**:
+   - **Pillar 1 — Validasi Awal (Start Check)**:
+     - Saat job baru diambil (`is_new_contract`), client plugin langsung melakukan pemindaian profil game (`ProfileValidator::ScanProfileSettings`).
+     - Data 9 parameter cvars, status mod, `gameId` (`"1"` / `"2"`), dan `game` dikirim ke `POST /api/tracker/jobs/start`.
+     - Job disimpan dengan field `gameId` dan `game` lengkap di MongoDB sehingga job ETS2 dan ATS tidak pernah bercampur atau konflik.
+     - Jika sejak awal konfigurasi ada yang belum memenuhi syarat (misal `g_fatigue 0`, mod terlarang aktif, dll.), backend server dan plugin langsung mengunci status job menjadi **`isHardcoreEligibleAtStart = false`** dan **`hardcore_disqualified = true`**.
+   - **Pillar 2 — Pemantauan Pelanggaran & Penguncian Mid-Trip (Latched Disqualification)**:
+     - Plugin memantau telemetri secara berkelanjutan selama berkendara:
+       - **Batas Kecepatan Real Miles Adaptif**: Jika kecepatan menembus batas Real Miles game aktif ($> 100\text{ km/h}$ untuk ETS2 atau $> 80\text{ mph}$ / $128.75\text{ km/h}$ untuk ATS), status langsung didiskualifikasi secara permanen (`s.hardcore_disqualified = true`).
+       - **Anti-Tampering Cvars Reaktif**: Setiap 5 detik, plugin memeriksa perubahan `last_write_time` berkas `config.cfg` dan `game.log.txt` (overhead sub-milidetik). Jika terdeteksi perubahan parameter cvars menjadi non-hardcore saat sedang berkendara, job langsung didiskualifikasi.
+       - **Anti-Warp / Speedhack**: Rasio lompatan waktu game vs wall-clock $> 26\times$ langsung mendiskualifikasi job.
+       - **Fitur Auto Park**: Menggunakan auto-parking langsung mengunci status diskualifikasi.
+     - **Prinsip One-Way Latch**: Sekali `hardcore_disqualified` menjadi `true`, nilai tersebut **TIDAK DAPAT KEMBALI MENJADI FALSE** sampai seluruh kontrak pekerjaan selesai dan kontrak baru dimulai.
+   - **Pillar 3 — Gerbang Validasi Akhir (Finish Verification di Server)**:
+     - Saat job selesai (`POST /api/tracker/jobs/complete`), server memvalidasi `driverJob.isHardcoreEligibleAtStart`, `payload.hardcoreDisqualifiedDuringTrip`, kelengkapan 9 cvar di finish, jarak tempuh aktual $\ge 250\text{ km}$, massa kargo $> 0\text{ ton}$, BBM $> 0\text{ L}$, dan kesesuaian kategori Real Miles sesuai `gameId`.
+
+5. **Kriteria Kelayakan Teknis (Semua Wajib Terpenuhi)**:
    - Kecepatan berada dalam kategori **Real Miles** ($\le 100\text{ km/h}$).
-   - Seluruh 9 setting konfigurasi profil di atas terkonfigurasi dengan benar.
+   - Seluruh 9 setting konfigurasi profil di atas terkonfigurasi dengan benar sejak start hingga finish.
    - Tidak menggunakan Auto Load (*No Auto Load* — dikecualikan untuk Freight Market, Public Transport System, dan WOTR Freight Market).
    - Parkir Manual (*Manual Parking* — event `auto_parking_used == false`).
    - Jarak tempuh aktual di atas 250 km (`distanceKm >= 250`).

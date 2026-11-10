@@ -335,12 +335,16 @@ struct TelemetrySnapshot {
 
     // Hardcore Mode Real-time Tracking & Criteria
     bool hardcore_eligible{true};
+    bool hardcore_eligible_at_start{true};
+    bool hardcore_disqualified{false};
+    std::string hardcore_disqualify_reason{};
     float hardcore_speeding_seconds{0.0f};
     int32_t hardcore_rest_overdue_minutes{0};
     bool hardcore_auto_park_used{false};
     bool hardcore_warp_detected{false};
     float hardcore_last_wallclock_sec{0.0f};
     uint32_t hardcore_last_game_time_min{0};
+    float hardcore_last_cvar_check_time{0.0f};
 
     // Hardcore Profile Diagnostic Status (9 Parameters)
     bool hardcore_profile_scanned{false};

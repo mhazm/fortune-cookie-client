@@ -493,6 +493,9 @@ void WebSurfaceBridge::DispatchTelemetry() {
         j["hardcore_rest_overdue_minutes"] = snap.hardcore_rest_overdue_minutes;
         j["hardcore_auto_park_used"] = snap.hardcore_auto_park_used;
         j["hardcore_warp_detected"] = snap.hardcore_warp_detected;
+        j["hardcore_eligible_at_start"] = snap.hardcore_eligible_at_start;
+        j["hardcore_disqualified"] = snap.hardcore_disqualified;
+        j["hardcore_disqualify_reason"] = snap.hardcore_disqualify_reason;
 
         // Last Job Paycheck Receipt
         j["has_last_job_receipt"] = snap.has_last_job_receipt;

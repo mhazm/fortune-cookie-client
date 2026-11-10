@@ -2466,12 +2466,16 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
                                             : 0.0f;
             ImGui::Text("Jarak Ditempuh: %.1f km  |  BBM: %.1f L", driven_so_far, snap.job_fuel_consumed_liters);
 
+            const bool is_ats = (snap.game_id == "ats" || snap.game_id == "amtrucks");
+            const float real_limit = is_ats ? 128.75f : 100.0f;
+            const float invalid_limit = is_ats ? 209.2f : 180.0f;
+
             const char* speed_cat = "Real Miles";
             ImVec4 speed_col = ImVec4(0.20f, 0.83f, 0.60f, 1.0f);
-            if (snap.job_max_speed_kmh > 180.0f) {
+            if (snap.job_max_speed_kmh > invalid_limit) {
                 speed_cat = "Invalid Stats";
                 speed_col = ImVec4(0.94f, 0.27f, 0.27f, 1.0f);
-            } else if (snap.job_max_speed_kmh > 100.0f) {
+            } else if (snap.job_max_speed_kmh > real_limit) {
                 speed_cat = "Race Miles";
                 speed_col = ImVec4(0.98f, 0.44f, 0.52f, 1.0f);
             }
@@ -2488,11 +2492,18 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
                                         snap.hc_advanced_coupling_ok && snap.hc_fuel_simulation_ok &&
                                         snap.hc_air_brake_ok && !snap.hc_forbidden_mods_found);
             const bool is_live_hc = hc_profile_ok &&
+                                    snap.hardcore_eligible_at_start &&
+                                    !snap.hardcore_disqualified &&
                                     !snap.hardcore_auto_park_used &&
                                     !snap.hardcore_warp_detected &&
                                     (snap.planned_distance_km >= 250);
             if (is_live_hc) {
                 ImGui::TextColored(ImVec4(0.98f, 0.82f, 0.15f, 1.0f), "[★ SIMULASI HARDCORE: ELIGIBLE]");
+            } else if (snap.hardcore_disqualified) {
+                ImGui::TextColored(ImVec4(0.94f, 0.27f, 0.27f, 1.0f), "[★ HARDCORE: GUGUR / DISKUALIFIKASI]");
+                if (!snap.hardcore_disqualify_reason.empty()) {
+                    ImGui::TextDisabled("Alasan: %s", snap.hardcore_disqualify_reason.c_str());
+                }
             } else {
                 ImGui::TextColored(ImVec4(0.55f, 0.65f, 0.75f, 1.0f), "[SIMULASI STANDAR]");
             }

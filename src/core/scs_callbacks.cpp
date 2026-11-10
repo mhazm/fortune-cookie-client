@@ -166,6 +166,26 @@ SCSAPI_VOID OnChannelSpeed(
                     s.hardcore_speeding_seconds += dt;
                 }
             }
+
+            // Real Miles & Invalid Stats speed threshold check:
+            // ETS2: Real Miles <= 100 km/h, Invalid > 180 km/h
+            // ATS: Real Miles <= 80 mph (~128.75 km/h), Invalid > 130 mph (~209.2 km/h)
+            const bool is_ats = (s.game_id == "ats" || s.game_id == "amtrucks");
+            const float real_miles_limit = is_ats ? 128.75f : 100.0f;
+            const float invalid_limit = is_ats ? 209.2f : 180.0f;
+
+            if (s.speed_kmh > real_miles_limit && !s.hardcore_disqualified) {
+                s.hardcore_disqualified = true;
+                if (is_ats) {
+                    s.hardcore_disqualify_reason = (s.speed_kmh > invalid_limit)
+                        ? "Kecepatan melebihi 130 mph (Invalid Stats)"
+                        : "Kecepatan melebihi 80 mph (Bukan Real Miles)";
+                } else {
+                    s.hardcore_disqualify_reason = (s.speed_kmh > invalid_limit)
+                        ? "Kecepatan melebihi 180 km/h (Invalid Stats)"
+                        : "Kecepatan melebihi 100 km/h (Bukan Real Miles)";
+                }
+            }
         }
     });
 }
@@ -634,6 +654,10 @@ SCSAPI_VOID OnChannelGameTime(
             // Normal ETS2/ATS time scale is 1:19 on highway, 1:3 in cities. Warp cheat or speedhack is > 25.0
             if (time_ratio > 26.0f) {
                 s.hardcore_warp_detected = true;
+                if (!s.hardcore_disqualified) {
+                    s.hardcore_disqualified = true;
+                    s.hardcore_disqualify_reason = "Manipulasi waktu permainan (Warp/Speedhack terdeteksi)";
+                }
             }
         }
         s.game_time_minutes = game_time;
@@ -713,6 +737,57 @@ SCSAPI_VOID OnTelemetryFrameStart(
         const float elapsed_sec = std::chrono::duration<float>(now - last_advance_tp).count();
         if (elapsed_sec < 0.25f && last_sim_time != 0) {
             sim_advanced = true;
+        }
+    }
+
+    // Periodic Hardcore cvar / mod tamper check while driving an active job (every 5 seconds)
+    static auto last_cvar_check_time = std::chrono::steady_clock::now();
+    const float cvar_dt = std::chrono::duration<float>(now - last_cvar_check_time).count();
+    if (cvar_dt >= 5.0f) {
+        last_cvar_check_time = now;
+        const auto snap = nismara::core::TelemetryState::Instance().GetSnapshot();
+        const bool should_scan = snap.job_active && !snap.hardcore_disqualified;
+
+        if (should_scan) {
+            try {
+                const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
+                std::error_code ec;
+                static std::filesystem::file_time_type last_cfg_time{};
+                static std::filesystem::file_time_type last_log_time{};
+                const auto cfg_path = game_docs / "config.cfg";
+                const auto log_path = game_docs / "game.log.txt";
+                const auto cur_cfg_time = std::filesystem::last_write_time(cfg_path, ec);
+                const auto cur_log_time = std::filesystem::last_write_time(log_path, ec);
+                if (cur_cfg_time != last_cfg_time || cur_log_time != last_log_time) {
+                    last_cfg_time = cur_cfg_time;
+                    last_log_time = cur_log_time;
+                    const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
+                    nismara::core::TelemetryState::Instance().Write([&hc_status](nismara::core::TelemetrySnapshot& s) {
+                        s.hc_traffic_ok = hc_status.traffic_ok;
+                        s.hc_fatigue_ok = hc_status.fatigue_ok;
+                        s.hc_police_ok = hc_status.police_ok;
+                        s.hc_parking_ok = hc_status.parking_ok;
+                        s.hc_road_events_ok = hc_status.road_events_ok;
+                        s.hc_rain_prob_ok = hc_status.rain_prob_ok;
+                        s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
+                        s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
+                        s.hc_air_brake_ok = hc_status.air_brake_ok;
+                        s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
+                        if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
+                            s.hc_forbidden_mods_list.clear();
+                            for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
+                                if (i > 0) s.hc_forbidden_mods_list += ", ";
+                                s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+                            }
+                        }
+
+                        if (s.job_active && !s.hardcore_disqualified && !hc_status.AllSettingsValid()) {
+                            s.hardcore_disqualified = true;
+                            s.hardcore_disqualify_reason = "Pengaturan diubah saat rute: " + hc_status.GetSummaryReason();
+                        }
+                    });
+                }
+            } catch (...) {}
         }
     }
 
@@ -909,6 +984,39 @@ SCSAPI_VOID OnTelemetryConfiguration(
                 s.hardcore_auto_park_used = false;
                 s.hardcore_warp_detected = false;
 
+                // Fresh Hardcore profile & forbidden mod scan at job start
+                try {
+                    const auto game_docs = nismara::core::ConfigManager::Instance().GetGameUserDataDirectory();
+                    const auto hc_status = nismara::core::ProfileValidator::ScanProfileSettings(game_docs);
+                    s.hardcore_profile_scanned = true;
+                    s.hc_traffic_ok = hc_status.traffic_ok;
+                    s.hc_fatigue_ok = hc_status.fatigue_ok;
+                    s.hc_police_ok = hc_status.police_ok;
+                    s.hc_parking_ok = hc_status.parking_ok;
+                    s.hc_road_events_ok = hc_status.road_events_ok;
+                    s.hc_rain_prob_ok = hc_status.rain_prob_ok;
+                    s.hc_advanced_coupling_ok = hc_status.advanced_coupling_ok;
+                    s.hc_fuel_simulation_ok = hc_status.fuel_simulation_ok;
+                    s.hc_air_brake_ok = hc_status.air_brake_ok;
+                    s.hc_forbidden_mods_found = hc_status.has_forbidden_mods;
+                    s.hc_forbidden_mods_list.clear();
+                    if (hc_status.has_forbidden_mods && !hc_status.forbidden_mods.empty()) {
+                        for (size_t i = 0; i < hc_status.forbidden_mods.size(); ++i) {
+                            if (i > 0) s.hc_forbidden_mods_list += ", ";
+                            s.hc_forbidden_mods_list += hc_status.forbidden_mods[i];
+                        }
+                    }
+
+                    const bool hc_valid_at_start = hc_status.AllSettingsValid();
+                    s.hardcore_eligible_at_start = hc_valid_at_start;
+                    s.hardcore_disqualified = !hc_valid_at_start;
+                    if (!hc_valid_at_start) {
+                        s.hardcore_disqualify_reason = hc_status.GetSummaryReason();
+                    } else {
+                        s.hardcore_disqualify_reason.clear();
+                    }
+                } catch (...) {}
+
                 // Initialize cumulative damage baseline from current wear at job start
                 s.job_prev_wear_engine = s.wear_engine;
                 s.job_prev_wear_transmission = s.wear_transmission;
@@ -954,6 +1062,19 @@ SCSAPI_VOID OnTelemetryConfiguration(
                 start_req.vehicle_model = s.truck_name;
                 start_req.vehicle_in_game_id = s.truck_in_game_id;
                 start_req.fleet_number = matched_fleet_number;
+
+                // Pass initial hardcore settings and forbidden mod scan to server
+                start_req.has_forbidden_mods = s.hc_forbidden_mods_found;
+                start_req.forbidden_mods_summary = s.hc_forbidden_mods_list;
+                start_req.hc_traffic_ok = s.hc_traffic_ok;
+                start_req.hc_fatigue_ok = s.hc_fatigue_ok;
+                start_req.hc_police_ok = s.hc_police_ok;
+                start_req.hc_parking_ok = s.hc_parking_ok;
+                start_req.hc_road_events_ok = s.hc_road_events_ok;
+                start_req.hc_rain_prob_ok = s.hc_rain_prob_ok;
+                start_req.hc_advanced_coupling_ok = s.hc_advanced_coupling_ok;
+                start_req.hc_fuel_simulation_ok = s.hc_fuel_simulation_ok;
+                start_req.hc_air_brake_ok = s.hc_air_brake_ok;
             }
         });
 
@@ -1087,21 +1208,37 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             comp_req.cargo_damage_pct = static_cast<int32_t>(std::round(max_crg_wear * 100.0f));
             comp_req.in_game_revenue = (event_revenue > 0) ? static_cast<uint64_t>(event_revenue) : s.reward_payout;
 
+            if (auto_park_used) {
+                s.hardcore_auto_park_used = true;
+                if (!s.hardcore_disqualified) {
+                    s.hardcore_disqualified = true;
+                    s.hardcore_disqualify_reason = "Fitur Auto Park digunakan";
+                }
+            }
+
             const bool is_late = (s.contract_deadline_min > 0 && s.game_time_minutes > s.contract_deadline_min);
             const bool hc_profile_ok = (s.hc_traffic_ok && s.hc_fatigue_ok && s.hc_police_ok &&
                                         s.hc_parking_ok && s.hc_road_events_ok && s.hc_rain_prob_ok &&
                                         s.hc_advanced_coupling_ok && s.hc_fuel_simulation_ok &&
                                         s.hc_air_brake_ok && !s.hc_forbidden_mods_found);
+            const bool is_ats = (s.game_id == "ats" || s.game_id == "amtrucks");
+            const float real_miles_limit = is_ats ? 128.75f : 100.0f;
             const bool is_hc_eligible = hc_profile_ok &&
+                                        s.hardcore_eligible_at_start &&
+                                        !s.hardcore_disqualified &&
                                         !auto_park_used &&
                                         !s.hardcore_warp_detected &&
                                         driven_km >= 250 &&
                                         s.cargo_mass_kg > 0.0f &&
-                                        s.job_fuel_consumed_liters > 0.0f;
+                                        s.job_fuel_consumed_liters > 0.0f &&
+                                        (comp_req.max_speed_kmh <= real_miles_limit);
 
             comp_req.is_hardcore = is_hc_eligible;
             comp_req.hardcore_rating = is_hc_eligible ? 5.0f : 0.0f;
             comp_req.is_hardcore_eligible = is_hc_eligible;
+            comp_req.is_hardcore_eligible_at_start = s.hardcore_eligible_at_start;
+            comp_req.hardcore_disqualified_during_trip = s.hardcore_disqualified;
+            comp_req.hardcore_mid_trip_reason = s.hardcore_disqualify_reason;
             comp_req.speeding_seconds = s.hardcore_speeding_seconds;
             comp_req.rest_overdue_minutes = s.hardcore_rest_overdue_minutes;
             comp_req.is_late = is_late;
