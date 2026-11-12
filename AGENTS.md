@@ -658,6 +658,32 @@ Fase ini mengimplementasikan persistensi checkpoint lintas-sesi yang tahan banti
    - Setiap titik direkam ringkas dalam format `{ int32_t x, int32_t z, uint8_t spd }`.
    - Titik-titik baru dikirim secara berkala via checkpoint dan seluruh jejak utuh dikirimkan saat `job_delivered` ke `POST /api/tracker/jobs/complete` untuk disimpan permanen di MongoDB `jobhistories.routePath` (dibatasi maksimum 15.000 titik per perjalanan untuk efisiensi penyimpanan).
 
+### Phase 18: Rework Nismara Companion (Command Center), Multi-Client Detection (TruckersMP & HaulMP), Dynamic Launcher Grid, System Tray, & Anti AI-Slop UI
+Fase ini merombak total arsitektur antarmuka dan backend desktop hub `Nismara Companion` (`nismara-companion.exe`) agar memiliki identitas visual eksklusif Nismara Transport yang berbeda dari HaulMP, mendukung klien multiplayer, integrasi system tray penuh, dan tata letak operasional terpadu:
+
+1. **Rombak Total Layout (Floating Horizontal Command Bar)**:
+   - Menggantikan sidebar vertikal kiri yang generic dengan **Floating Top Command Bar** bernuansa *Dark Luxury Logistics* (`#070a10` OLED canvas + aksen emas & emerald).
+   - Menampilkan Brand Identity resmi Nismara, pill status aktif `● Gatekeeper Aktif` / `● Sedang Bermain: [Game]`, navigasi tab bergaya segmented glass (`Armada & Game`, `Warta`, `Event & Misi`, `Pengaturan`), Driver Mini-Card profil & saldo NC, serta tombol sembunyikan ke System Tray.
+
+2. **Dashboard Operasional Terpadu (Integrated Operations Manifest)**:
+   - Terintegrasi langsung dengan `/api/tracker/me`:
+     - **Saat Job Aktif (`ongoingJob`)**: Menampilkan manifest elektronik rute aktif (kota asal ➜ tujuan, nama kargo, jarak tercatat realtime, status kerusakan armada, dan timestamp cloud checkpoint).
+     - **Saat Job Kosong (`lastCompletedJob`)**: Menampilkan rekapitulasi surat jalan pengiriman terakhir yang berhasil diselesaikan beserta jarak tempuh, perolehan NC bersih, dan persentase kerusakan.
+     - **Driver Baru**: Menampilkan kartu kesiapan armada untuk segera meluncur ke rute dispatch.
+
+3. **Deteksi Multiplayer & Grid Peluncur Dinamis (Hanya Klien Terpasang)**:
+   - Backend Rust mendeteksi 4 target klien: **Euro Truck Simulator 2**, **American Truck Simulator**, **TruckersMP**, dan **HaulMP** melalui scanning registri Windows (`HKCU\Software\TruckersMP`), Steam VDF library, dan direktori AppData/Program Files.
+   - **Aturan Grid Dinamis**: Aplikasi HANYA merender kartu game/launcher yang benar-benar terdeteksi terpasang (`is_installed == true`). Simulator yang belum dipasang pengguna tidak akan ditampilkan sama sekali di dashboard launcher.
+   - Menyediakan pemilihan file executable manual (`.exe`) via dialog file explorer Windows bawaan (`rfd::FileDialog`) di tab Pengaturan.
+
+4. **Integrasi System Tray (Icon Tray) & Auto-Minimize**:
+   - Built-in tray icon via Tauri v2 `TrayIconBuilder` dengan menu klik kanan ("Buka Dashboard", "Portal Web Driver", "Keluar Aplikasi") dan klik kiri untuk toggle jendela.
+   - Tombol tutup jendela (`X`) di-intercept dengan `api.prevent_close()` dan jendela disembunyikan ke System Tray (`window.hide()`) tanpa menutup proses background gatekeeper (`Global\NismaraCompanionRunning`).
+   - Saat pengguna menekan tombol "Luncurkan Game", aplikasi mengeksekusi klien terkait dan secara otomatis langsung menyembunyikan diri ke System Tray.
+
+5. **Penulisan 100% Anti AI-Slop**:
+   - Seluruh teks antarmuka, pengaturan, dan kartu operasional menggunakan gaya bahasa Indonesia profesional, ringkas, aktif, dan bebas dari kata-kata klise (*delve, elevate, streamline, seamless, supercharge, robust*).
+
 ---
 
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)

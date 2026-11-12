@@ -7,6 +7,8 @@ use std::sync::{
     Arc,
 };
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
 #[cfg(target_os = "windows")]
@@ -649,10 +651,170 @@ fn find_bundled_plugin_source(binary_name: &str) -> Option<PathBuf> {
     None
 }
 
+fn detect_truckersmp(custom_path_opt: Option<&str>) -> GameInfo {
+    let mut installed = false;
+    let mut exe_path = PathBuf::new();
+    let name = "TruckersMP".to_string();
+
+    // 1. Check user-specified custom path if provided
+    if let Some(custom) = custom_path_opt {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            if p.is_file() && p.exists() {
+                installed = true;
+                exe_path = p;
+            } else if p.is_dir() {
+                let candidate = p.join("TruckersMP-Launcher.exe");
+                if candidate.exists() {
+                    installed = true;
+                    exe_path = candidate;
+                }
+            }
+        }
+    }
+
+    // 2. Windows Registry discovery
+    #[cfg(target_os = "windows")]
+    if !installed {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(key) = hkcu.open_subkey("Software\\TruckersMP") {
+            if let Ok(dir) = key.get_value::<String, _>("InstallDir") {
+                let cand = PathBuf::from(&dir).join("TruckersMP-Launcher.exe");
+                if cand.exists() {
+                    installed = true;
+                    exe_path = cand;
+                }
+            }
+        }
+
+        if !installed {
+            let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+            if let Ok(key) = hklm.open_subkey("SOFTWARE\\WOW6432Node\\TruckersMP") {
+                if let Ok(dir) = key.get_value::<String, _>("InstallDir") {
+                    let cand = PathBuf::from(&dir).join("TruckersMP-Launcher.exe");
+                    if cand.exists() {
+                        installed = true;
+                        exe_path = cand;
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Common directory discovery
+    if !installed {
+        if let Some(home) = get_home_dir() {
+            let candidates = [
+                home.join("AppData").join("Local").join("TruckersMP Launcher").join("TruckersMP-Launcher.exe"),
+                home.join("AppData").join("Local").join("Programs").join("TruckersMP Launcher").join("TruckersMP-Launcher.exe"),
+                PathBuf::from("C:\\Program Files\\TruckersMP Launcher\\TruckersMP-Launcher.exe"),
+                PathBuf::from("C:\\Program Files (x86)\\TruckersMP Launcher\\TruckersMP-Launcher.exe"),
+            ];
+            for cand in &candidates {
+                if cand.exists() {
+                    installed = true;
+                    exe_path = cand.clone();
+                    break;
+                }
+            }
+        }
+    }
+
+    let is_running = is_process_running("TruckersMP-Launcher") || is_process_running("core_ets2mp");
+
+    GameInfo {
+        id: "truckersmp".to_string(),
+        name,
+        steam_app_id: 0,
+        is_installed: installed,
+        game_path: exe_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        exe_path: exe_path.to_string_lossy().to_string(),
+        plugin_dir: String::new(),
+        plugin_installed: true,
+        plugin_path: String::new(),
+        user_data_dir: String::new(),
+        config_path: String::new(),
+        is_running,
+        plugin_outdated: false,
+    }
+}
+
+fn detect_haulmp(custom_path_opt: Option<&str>) -> GameInfo {
+    let mut installed = false;
+    let mut exe_path = PathBuf::new();
+    let name = "HaulMP".to_string();
+
+    // 1. Check user-specified custom path if provided
+    if let Some(custom) = custom_path_opt {
+        let trimmed = custom.trim();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(trimmed);
+            if p.is_file() && p.exists() {
+                installed = true;
+                exe_path = p;
+            } else if p.is_dir() {
+                let candidate = p.join("HaulMP Launcher.exe");
+                if candidate.exists() {
+                    installed = true;
+                    exe_path = candidate;
+                } else {
+                    let candidate2 = p.join("HaulMP.exe");
+                    if candidate2.exists() {
+                        installed = true;
+                        exe_path = candidate2;
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Common directory discovery
+    if !installed {
+        if let Some(home) = get_home_dir() {
+            let candidates = [
+                home.join("AppData").join("Local").join("Programs").join("haulmp-launcher").join("HaulMP Launcher.exe"),
+                home.join("AppData").join("Local").join("haulmp-launcher").join("HaulMP Launcher.exe"),
+                home.join("AppData").join("Local").join("HaulMP").join("HaulMP.exe"),
+                home.join("AppData").join("Roaming").join("HaulMP").join("HaulMP.exe"),
+                PathBuf::from("C:\\Program Files\\HaulMP Launcher\\HaulMP Launcher.exe"),
+                PathBuf::from("C:\\Program Files\\HaulMP\\HaulMP.exe"),
+            ];
+            for cand in &candidates {
+                if cand.exists() {
+                    installed = true;
+                    exe_path = cand.clone();
+                    break;
+                }
+            }
+        }
+    }
+
+    let is_running = is_process_running("HaulMP Launcher") || is_process_running("HaulMP");
+
+    GameInfo {
+        id: "haulmp".to_string(),
+        name,
+        steam_app_id: 0,
+        is_installed: installed,
+        game_path: exe_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        exe_path: exe_path.to_string_lossy().to_string(),
+        plugin_dir: String::new(),
+        plugin_installed: true,
+        plugin_path: String::new(),
+        user_data_dir: String::new(),
+        config_path: String::new(),
+        is_running,
+        plugin_outdated: false,
+    }
+}
+
 fn detect_games(
     libraries: &[PathBuf],
     custom_ets2_path: Option<&str>,
     custom_ats_path: Option<&str>,
+    custom_truckersmp_path: Option<&str>,
+    custom_haulmp_path: Option<&str>,
 ) -> Vec<GameInfo> {
     let game_targets = [
         ("ets2", "Euro Truck Simulator 2", 227300u32, "eurotrucks2", custom_ets2_path),
@@ -759,6 +921,10 @@ fn detect_games(
             plugin_outdated,
         });
     }
+
+    // Append multiplayer launchers
+    result.push(detect_truckersmp(custom_truckersmp_path));
+    result.push(detect_haulmp(custom_haulmp_path));
 
     result
 }
@@ -941,6 +1107,8 @@ async fn save_plugin_config(
 async fn get_system_status(
     custom_ets2_path: Option<String>,
     custom_ats_path: Option<String>,
+    custom_truckersmp_path: Option<String>,
+    custom_haulmp_path: Option<String>,
 ) -> Result<SystemStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let steam_path_opt = get_steam_path();
@@ -960,6 +1128,8 @@ async fn get_system_status(
             &libraries,
             custom_ets2_path.as_deref(),
             custom_ats_path.as_deref(),
+            custom_truckersmp_path.as_deref(),
+            custom_haulmp_path.as_deref(),
         );
 
         SystemStatus {
@@ -999,7 +1169,7 @@ async fn install_plugin(
             None
         };
 
-        let games = detect_games(&libraries, custom_ets2, custom_ats);
+        let games = detect_games(&libraries, custom_ets2, custom_ats, None, None);
 
         let target_game = games
             .into_iter()
@@ -1074,12 +1244,14 @@ async fn auto_sync_plugins(
             &libraries,
             custom_ets2_path.as_deref(),
             custom_ats_path.as_deref(),
+            None,
+            None,
         );
 
         let mut reports = Vec::new();
 
         for game in games {
-            if !game.is_installed {
+            if !game.is_installed || game.plugin_path.is_empty() {
                 continue;
             }
 
@@ -1125,40 +1297,107 @@ async fn auto_sync_plugins(
 }
 
 #[tauri::command]
-fn launch_game(game_id: String) -> Result<String, String> {
-    let app_id = match game_id.as_str() {
-        "ets2" => 227300u32,
-        "ats" => 270880u32,
-        _ => return Err("Unsupported game identifier".to_string()),
-    };
+fn select_executable_file(title: String) -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title(&title)
+        .add_filter("Aplikasi Executable (*.exe)", &["exe"])
+        .pick_file()
+        .map(|p| p.to_string_lossy().to_string())
+}
 
-    let steam_uri = format!("steam://rungameid/{}", app_id);
+#[tauri::command]
+fn hide_to_tray(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.hide().map_err(|e| e.to_string())
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", &steam_uri])
-            .spawn()
-            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
+#[tauri::command]
+fn show_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|e| e.to_string())?;
+    window.unminimize().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn minimize_window(window: tauri::WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
+fn launch_client(client_id: String, custom_path: Option<String>, window: tauri::WebviewWindow) -> Result<String, String> {
+    match client_id.as_str() {
+        "ets2" => {
+            if let Some(ref path) = custom_path {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() && Path::new(trimmed).exists() {
+                    std::process::Command::new(trimmed)
+                        .spawn()
+                        .map_err(|e| format!("Gagal meluncurkan ETS2: {}", e))?;
+                } else {
+                    let steam_uri = "steam://rungameid/227300";
+                    #[cfg(target_os = "windows")]
+                    std::process::Command::new("cmd").args(["/c", "start", steam_uri]).spawn().map_err(|e| e.to_string())?;
+                }
+            } else {
+                let steam_uri = "steam://rungameid/227300";
+                #[cfg(target_os = "windows")]
+                std::process::Command::new("cmd").args(["/c", "start", steam_uri]).spawn().map_err(|e| e.to_string())?;
+            }
+        }
+        "ats" => {
+            if let Some(ref path) = custom_path {
+                let trimmed = path.trim();
+                if !trimmed.is_empty() && Path::new(trimmed).exists() {
+                    std::process::Command::new(trimmed)
+                        .spawn()
+                        .map_err(|e| format!("Gagal meluncurkan ATS: {}", e))?;
+                } else {
+                    let steam_uri = "steam://rungameid/270880";
+                    #[cfg(target_os = "windows")]
+                    std::process::Command::new("cmd").args(["/c", "start", steam_uri]).spawn().map_err(|e| e.to_string())?;
+                }
+            } else {
+                let steam_uri = "steam://rungameid/270880";
+                #[cfg(target_os = "windows")]
+                std::process::Command::new("cmd").args(["/c", "start", steam_uri]).spawn().map_err(|e| e.to_string())?;
+            }
+        }
+        "truckersmp" => {
+            let tmp = detect_truckersmp(custom_path.as_deref());
+            if tmp.is_installed && !tmp.exe_path.is_empty() {
+                std::process::Command::new(&tmp.exe_path)
+                    .spawn()
+                    .map_err(|e| format!("Gagal meluncurkan TruckersMP: {}", e))?;
+            } else {
+                return Err("TruckersMP Launcher tidak ditemukan di sistem.".to_string());
+            }
+        }
+        "haulmp" => {
+            let hmp = detect_haulmp(custom_path.as_deref());
+            if hmp.is_installed && !hmp.exe_path.is_empty() {
+                std::process::Command::new(&hmp.exe_path)
+                    .spawn()
+                    .map_err(|e| format!("Gagal meluncurkan HaulMP: {}", e))?;
+            } else {
+                return Err("HaulMP Launcher tidak ditemukan di sistem.".to_string());
+            }
+        }
+        _ => return Err(format!("Identifier klien '{}' tidak dikenal", client_id)),
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&steam_uri)
-            .spawn()
-            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
-    }
+    // Auto hide window to system tray when game starts
+    let _ = window.hide();
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&steam_uri)
-            .spawn()
-            .map_err(|e| format!("Failed to launch game via Steam: {}", e))?;
-    }
+    Ok(format!("Klien {} berhasil diluncurkan", client_id))
+}
 
-    Ok(format!("Sent launch command to Steam for App ID {}", app_id))
+#[tauri::command]
+fn launch_game(game_id: String, window: tauri::WebviewWindow) -> Result<String, String> {
+    launch_client(game_id, None, window)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1171,15 +1410,78 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(gatekeeper_guard);
+
+            let show_i = MenuItem::with_id(app, "show", "Buka Dashboard", true, None::<&str>)?;
+            let portal_i = MenuItem::with_id(app, "portal", "Portal Web Driver", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Keluar Aplikasi", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&show_i, &portal_i, &quit_i])?;
+
+            if let Some(icon) = app.default_window_icon().cloned() {
+                let _tray = TrayIconBuilder::new()
+                    .icon(icon)
+                    .menu(&tray_menu)
+                    .tooltip("Nismara Companion — Official VTC Hub")
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        match event.id().as_ref() {
+                            "show" => {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                            "portal" => {
+                                let _ = tauri_plugin_opener::open_url("https://beta.nismara.web.id", None::<&str>);
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click {
+                            button: MouseButton::Left,
+                            button_state: MouseButtonState::Up,
+                            ..
+                        } = event {
+                            let app = tray.app_handle();
+                            if let Some(w) = app.get_webview_window("main") {
+                                if w.is_visible().unwrap_or(false) {
+                                    let _ = w.hide();
+                                } else {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_system_status,
             install_plugin,
             auto_sync_plugins,
             launch_game,
+            launch_client,
             get_plugin_config,
-            save_plugin_config
+            save_plugin_config,
+            select_executable_file,
+            hide_to_tray,
+            show_window,
+            minimize_window,
+            quit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running Nismara Companion");
