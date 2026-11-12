@@ -1734,7 +1734,7 @@ export default function App() {
                   </h3>
                 </div>
                 <a
-                  href="https://beta.nismara.web.id/profile"
+                  href="https://transport.nismara.web.id/profile"
                   target="_blank"
                   rel="noreferrer"
                   className="text-xs text-amber-400 hover:underline flex items-center gap-1 cursor-pointer"

@@ -1432,7 +1432,7 @@ pub fn run() {
                                 }
                             }
                             "portal" => {
-                                let _ = tauri_plugin_opener::open_url("https://beta.nismara.web.id", None::<&str>);
+                                let _ = tauri_plugin_opener::open_url("https://transport.nismara.web.id", None::<&str>);
                             }
                             "quit" => {
                                 app.exit(0);
