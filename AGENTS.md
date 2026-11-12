@@ -579,6 +579,56 @@ Bagian ini merangkum arsitektur final yang sudah 100% stabil agar model AI mana 
      - Jika aplikasi desktop **`Nismara Companion` TIDAK dibuka** oleh pemain: **pekerjaan TIDAK BOLEH dicatat ke database** (request `/jobs/start`, `/jobs/complete`, `/jobs/cancel` diblokir). **JANGAN PERNAH menghapus pemeriksaan `IsCompanionAppRunning()` ini!**
      - Jika aplikasi desktop **`Nismara Companion` SEDANG terbuka** (baik di layar maupun berjalan di background/system tray): **pekerjaan TETAP DICATAT 100% OTOMATIS ke database oleh `scs_callbacks.cpp` meskipun pemain sama sekali tidak membuka layar HP in-game (`F11`) selama perjalanan**.
 
+
+### Phase 16: Resolusi Pengujian Close Beta (v1.0.3), Anti-Teleport Koordinat Fisik 2D, Safe JSON, & Resumed Ongoing Job
+Fase ini menyelesaikan 5 issue kritis yang ditemukan selama masa pengujian Close Beta bersama driver VTC Nismara Transport:
+
+1. **Resolusi Issue #5: Anti-Crash Pre-Flight Ultralight 2.0 & Graceful Fallback**:
+   - **Masalah**: Menekan `F11` untuk membuka Companion Phone in-game menyebabkan *Crash to Desktop (CTD)* seketika.
+   - **Penyebab**: Karena DLL Ultralight dikompilasi dengan `/DELAYLOAD`, ketiadaan file DLL di direktori pengguna memicu *Windows Structured Exception (SEH)* `0xC06D007E` saat fungsi Ultralight dipanggil. Blok `catch (...)` standar C++ tidak menangkap eksepsi SEH tanpa compiler flag `/EHa`.
+   - **Solusi**:
+     - Di [`src/ui/web_surface_bridge.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/ui/web_surface_bridge.cpp), ditambahkan verifikasi fisik `std::filesystem::exists()` dan pra-muat eksplisit `LoadLibraryW()` untuk ke-4 DLL runtime (`UltralightCore.dll`, `WebCore.dll`, `AppCore.dll`, `Ultralight.dll`) serta berkas ICU `icudt67l.dat`.
+     - Jika ada pustaka yang hilang atau gagal dimuat, bridge langsung membatalkan inisialisasi WebKit (`m_initialized = false`) dan secara otomatis **fallback ke native Dear ImGui Phone OS tanpa memicu exception maupun crash**.
+     - Membuka filter `.gitignore` dan memperbarui CI workflow [`.github/workflows/release.yml`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/.github/workflows/release.yml) agar seluruh runtime Ultralight otomatis ter-bundle ke installer produksi `%LOCALAPPDATA%\Nismara Companion\resources\runtime\`.
+
+2. **Resolusi Issue #2: C++ Safe JSON Helpers & Sanitasi Data Null MongoDB**:
+   - **Masalah**: Gagal sinkronisasi profil dengan pesan `Sync Error : [json.exeption.type_error.302] type must be string, but is null`. Akibatnya, data garasi tetap kosong dan truk aktif ditandai unregistered (`SEWA`).
+   - **Penyebab**: Di pustaka `nlohmann::json`, method `j.value(key, default)` tetap memanggil `.get<T>()` apabila `key` ditemukan di dokumen JSON tetapi bernilai `null` dari MongoDB (misal `next_payment_date: null`, `maintenance_start_date: null`).
+   - **Solusi**:
+     - Di [`src/core/api_client.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/api_client.cpp), dibuat helper fungsi aman: `SafeJsonString()`, `SafeJsonDouble()`, `SafeJsonInt32()`, `SafeJsonInt64()`, dan `SafeJsonBool()` yang memvalidasi `j.contains(key) && !j[key].is_null()`.
+     - Di server [`src/routes/me.routes.js`](file:///D:/Project/Nismara%20Transport/Project/nismara-tracker-server/src/routes/me.routes.js), seluruh tanggal dan string opsional disanitasi agar mengembalikan string kosong `""` bukan `null`.
+
+3. **Resolusi Issue #3: Hidrasi Pekerjaan yang Dilanjutkan (Resumed Ongoing Delivery)**:
+   - **Masalah**: Melanjutkan permainan dari save game lama yang sedang di tengah rute pengiriman kargo menampilkan status "TIDAK ADA PEKERJAAN AKTIF" (Standby) di aplikasi Job.
+   - **Penyebab**: SCS Telemetry SDK tidak menembakkan event `job_started` saat me-load save game dengan ongoing job. Konfigurasi awal yang kosong sempat membersihkan state waybill lokal.
+   - **Solusi**:
+     - Di [`src/core/api_client.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/api_client.cpp), saat login / sinkronisasi `/me` mendeteksi adanya dokumen `ongoingJob`, data job dihidrasi langsung ke telemetri (`job_active = true`, `active_job_db_id = ongoingJob.jobId`, `active_job_sync_status = "Resumed Job #" + id`, serta kota asal, tujuan, dan kargo).
+     - Di [`src/core/scs_callbacks.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/scs_callbacks.cpp), pembersihan konfigurasi kosong diproteksi dengan `if (s.active_job_db_id.empty())`.
+     - Di [`tablet_gui.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/ui/tablet_gui.cpp) dan [`DispatchApp.tsx`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/phone-ui/src/screens/DispatchApp.tsx), waybill menampilkan kartu manifes dengan status pill `RESUMED`, tab `Kontrak Dilanjutkan`, dan header badge `[JOB #<id> - DILANJUTKAN]`.
+
+4. **Resolusi Issue #4: Arsitektur Dual-Radar Anti-Cheat Hardcore Simulation (Waktu & Koordinat Fisik 2D)**:
+   - **Masalah**: Naik kapal feri atau kereta (misal Eurotunnel) terdeteksi sebagai cheat *warp* dan membatalkan status Hardcore Mode.
+   - **Solusi Radar 1 — Deteksi Manipulasi Aliran Waktu (Speedhack / Console `warp X`)**:
+     - Hook event resmi SCS SDK: `player.use.ferry` dan `player.use.train` (`s.hardcore_in_transit = true`).
+     - Lompatan waktu diskret $\ge 10\text{ menit}$ in-game dalam 1 tick (tidur di rest area 8–12+ jam atau penyeberangan feri/kereta) **langsung diabaikan (return)** dan baseline waktu di-reset.
+     - **Bebas Ketergantungan Waktu Nyata**: Menghilangkan timer stopwatch dunia nyata (`dt_wall`), sehingga kecepatan loading storage (baik HDD lambat 20–45 detik maupun SSD cepat 1–2 detik) **100% aman dan tidak akan pernah memicu diskualifikasi palsu (*zero false positives*)**.
+     - Hanya mendiskualifikasi cheat `warp` konsol kontinu di mana rasio waktu $> 26.0\times$ dengan $\Delta t < 10\text{ menit}$ selama 3 detik berturut-turut.
+   - **Solusi Radar 2 — Deteksi Relokasi Fisik 2D Euclidean (Anti-Teleport Kamera 0, `goto`, Towing F7)**:
+     - **Pemberian Konteks**: Kamera 0 (`freecam` + `F9` / `Ctrl+F9`) sama sekali **TIDAK** mengubah jam permainan, sehingga perhitungan waktu tidak akan pernah bisa mendeteksinya.
+     - Di [`src/core/scs_callbacks.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/core/scs_callbacks.cpp) (`OnChannelWorldPlacement`), posisi dunia horizontal `dplacement` truk dipantau setiap $\Delta t \ge 1.0\text{ detik}$.
+     - Menghitung jarak horizontal Euclidean: $\Delta d = \sqrt{(X_t - X_{t-1})^2 + (Z_t - Z_{t-1})^2}$ (meter) dan kecepatan semu $v = (\Delta d / \Delta t) \times 3.6\text{ km/h}$.
+     - Jika $\Delta d > 300\text{ meter}$ dan $v > 360\text{ km/h}$ di luar aktivitas transit resmi feri/kereta: sistem seketika mendiskualifikasi job dengan alasan `"Teleportasi posisi terdeteksi (Kamera 0/Relokasi tidak sah)"` dan menampilkan peringatan di layar HP in-game.
+
+5. **Resolusi Issue #1: Interaktif Dragging & Persistensi Posisi Companion Phone**:
+   - Di [`src/hooks/wndproc_hook.cpp`](file:///d:/Project/Nismara%20Transport/Project/nismara-tracker/src/hooks/wndproc_hook.cpp), ditambahkan penanganan drag pada top bezel HP dengan klik kiri (`VK_LBUTTON`).
+   - Posisi koordinat layar tersimpan otomatis ke `nismara_config.dat` (`phone_pos_x`, `phone_pos_y`) dan dimuat kembali saat game dibuka.
+
+6. **Kompabilitas Adaptif Hardcore Mode & Miles Classification (ETS2 vs ATS)**:
+   - Klasifikasi kecepatan trip disesuaikan secara proporsional di [`jobProcessor.js`](file:///D:/Project/Nismara%20Transport/Project/nismara-tracker-server/src/services/jobProcessor.js):
+     - **ETS2 (`eut2` / `gameId: 1`)**: Real Miles $\le 100\text{ km/h}$, Race Miles $101 - 180\text{ km/h}$, Invalid $> 180\text{ km/h}$.
+     - **ATS (`amtrucks` / `gameId: 2`)**: Real Miles $\le 80\text{ mph}$ ($128.75\text{ km/h}$), Race Miles $81 - 130\text{ mph}$ ($209.2\text{ km/h}$), Invalid $> 130\text{ mph}$ ($209.2\text{ km/h}$).
+   - Menyimpan field `game` dan `gameId` pada setiap dokumen `jobhistories` agar pencatatan job antar-kedua simulator terpisah bersih dan adil.
+
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
 
 Proyek ini digunakan oleh sekitar **300+ pengemudi aktif VTC Nismara Transport** dengan spesifikasi perangkat, sistem operasi, dan struktur penyimpanan yang sangat beragam. Seluruh desain dan kode di `nismara-tracker`, `nismara-companion`, dan `nismara-tracker-server` **WAJIB** mematuhi tiga pilar produksi berikut:
@@ -734,6 +784,11 @@ Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\n
 - **DO**: Pisahkan penanganan eksepsi Win32 SEH (`__try / __except`) ke dalam static helper fungsi murni (tanpa objek C++ yang memerlukan stack unwinding) jika digabungkan dengan C++ `try / catch`, untuk mencegah konflik kompilator MSVC `error C2712` dan `error C2713`.
 - **DO**: Gunakan default constructor `ImFontConfig cfg;` saat memuat font di Dear ImGui, **jangan pernah** menggunakan zero-initialization `ImFontConfig cfg = {};` karena akan membuat `ExtraSizeScale = 0.0f` dan memicu floating-point division by zero di dalam rasterizer font atlas ImGui.
 
+- **DO**: Gunakan helper `SafeJsonString`, `SafeJsonDouble`, `SafeJsonInt32`, `SafeJsonInt64`, dan `SafeJsonBool` di C++ saat mem-parsing JSON dari server yang memungkinkan field bernilai `null` dari MongoDB. Memanggil `.value("key", "default")` pada field yang ada tetapi bernilai `null` akan memicu `nlohmann::json::type_error.302` dan menghentikan proses parsing.
+- **DO**: Selalu verifikasi keberadaan fisik file runtime Ultralight (`std::filesystem::exists`) dan uji muat (`LoadLibraryW`) sebelum memanggil API Ultralight C++ pada `WebSurfaceBridge`, agar jika runtime hilang di komputer pengguna, plugin otomatis *fallback* ke ImGui Phone OS tanpa melempar SEH exception (`0xC06D007E`) yang mematikan game.
+- **DO**: Pisahkan deteksi cheat waktu (*speedhack/warp*) dari deteksi cheat relokasi fisik (*kamera 0/goto/towing*). Gunakan `player.use.ferry` dan `player.use.train` dari SCS SDK untuk menandai transit legal, dan gunakan lompatan waktu diskret $\ge 10\text{ menit}$ untuk tidur (8–12+ jam) tanpa timer stopwatch dunia nyata agar performa loading HDD tidak memicu false positive.
+- **DO**: Deteksi kamera 0 / teleportasi menggunakan perpindahan koordinat fisik 2D Euclidean ($\Delta d > 300\text{ m}$ dan $v > 360\text{ km/h}$) di `OnChannelWorldPlacement`. Kamera 0 sama sekali tidak mengubah laju jam in-game, sehingga pelacakan koordinat adalah satu-satunya metode andal untuk menangkapnya.
+
 ### DON'T (Yang Dilarang Dilakukan)
 - **DON'T**: **Jangan pernah** memasang hook pada `IDirectInput8W::CreateDevice` (VTable index `3`) di `src/hooks/wndproc_hook.cpp`! Hooking `CreateDevice` akan menyebabkan game langsung **CRASH** ketika pengguna mencolokkan perangkat Joystick, Steering Wheel, atau Gamepad saat bermain. Hanya pasang hook pada `GetDeviceState` (index `9`) dan `GetDeviceData` (index `10`) pada device `GUID_SysMouse`.
 - **DON'T**: **Jangan pernah** memaksa atau meng-hardcode nomor lambung truk (`fleet_number` seperti `NL-074`) apabila `has_matched_fleet == false`. Jika truk yang dipakai di game tidak cocok dengan daftar kepemilikan `fleets` user, truk tersebut adalah **Truk Sewa (`SEWA` / `[UNREGISTERED]`)**.
@@ -754,4 +809,6 @@ Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\n
 - **DON'T**: **Jangan pernah** menggunakan karakter non-ASCII / simbol Unicode eksotis yang tidak didukung oleh subset glyph default Dear ImGui (`Segoe UI` ASCII/Latin-1 range) di dalam string UI C++, karena akan tampil sebagai tanda tanya (`?`). Gunakan teks bersih atau ikon vektor `ImDrawList`.
 - **DON'T**: **Jangan pernah** mengandalkan pembacaan baris pertama hingga akhir pada `game.log.txt` untuk mendeteksi server multiplayer tanpa memprioritaskan modul DLL di memori (`haulmp_stub.dll` vs `core_ets2mp.dll`) dan urutan baris log paling bawah (*reverse scan*).
 - **DON'T**: **Jangan pernah** menyalin atau menduplikasi folder `runtime/` dan `web-ui/` ke root direktori instalasi Companion App (`%LOCALAPPDATA%\Nismara Companion\`). Seluruh aset runtime Ultralight dan bundle Phone UI **WAJIB** dibaca langsung dari subfolder `resources/` (`%LOCALAPPDATA%\Nismara Companion\resources\runtime` dan `resources\web-ui`) agar tidak terjadi pembengkakan ukuran instalasi (*disk storage bloat*).
-
+- **DON'T**: **Jangan pernah** menggunakan `j.value("key", "default")` secara langsung pada field JSON yang berpotensi bernilai `null` dari MongoDB (seperti tanggal jatuh tempo atau tanggal servis). `nlohmann::json` akan melempar exception `type_error.302` jika key ada tetapi bertipe `null`.
+- **DON'T**: **Jangan pernah** mengasumsikan durasi tidur di game hanya 8–9 jam. Di ETS2/ATS versi modern atau dengan mod kelelahan, tidur bisa mencapai 12 jam ($720\text{ menit}$) atau lebih. Deteksi tidur diskret $\ge 10\text{ menit}$ mencakup semua durasi tidur tanpa membatasi jamnya.
+- **DON'T**: **Jangan pernah** menggunakan timer detik dunia nyata (*wall clock stopwatch*) untuk mendeteksi event in-game seperti feri, kereta, atau tidur, karena waktu loading di HDD (20–45 detik) berbeda jauh dengan SSD (1–2 detik) dan dapat menyebabkan diskualifikasi palsu (*false positive*).
