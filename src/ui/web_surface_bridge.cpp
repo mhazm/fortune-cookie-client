@@ -129,13 +129,34 @@ bool WebSurfaceBridge::Initialize() {
             return false;
         }
 
-        // 1. Explicitly configure DLL search paths and preload Ultralight runtime DLLs
+        // 1. Verify all required Ultralight runtime binaries and ICU data exist
+        const auto core_dll = runtime_dir / L"UltralightCore.dll";
+        const auto web_dll = runtime_dir / L"WebCore.dll";
+        const auto app_dll = runtime_dir / L"AppCore.dll";
+        const auto ul_dll = runtime_dir / L"Ultralight.dll";
+        const auto icu_dat = runtime_dir / L"icudt67l.dat";
+
+        if (!std::filesystem::exists(core_dll, ec) ||
+            !std::filesystem::exists(web_dll, ec) ||
+            !std::filesystem::exists(app_dll, ec) ||
+            !std::filesystem::exists(ul_dll, ec) ||
+            !std::filesystem::exists(icu_dat, ec)) {
+            OutputDebugStringA("[WebSurfaceBridge] Missing Ultralight runtime DLLs or icudt67l.dat, safely falling back to native ImGui Phone OS\n");
+            return false;
+        }
+
+        // 2. Explicitly configure DLL search paths and preload Ultralight runtime DLLs
         SetDllDirectoryW(runtime_dir.c_str());
         AddDllDirectory(runtime_dir.c_str());
-        LoadLibraryW((runtime_dir / L"UltralightCore.dll").c_str());
-        LoadLibraryW((runtime_dir / L"WebCore.dll").c_str());
-        LoadLibraryW((runtime_dir / L"AppCore.dll").c_str());
-        LoadLibraryW((runtime_dir / L"Ultralight.dll").c_str());
+        HMODULE h_core = LoadLibraryW(core_dll.c_str());
+        HMODULE h_web = LoadLibraryW(web_dll.c_str());
+        HMODULE h_app = LoadLibraryW(app_dll.c_str());
+        HMODULE h_ul = LoadLibraryW(ul_dll.c_str());
+
+        if (!h_core || !h_web || !h_app || !h_ul) {
+            OutputDebugStringA("[WebSurfaceBridge] Failed to load one or more Ultralight runtime DLLs, safely falling back to native ImGui Phone OS\n");
+            return false;
+        }
 
         // 2. Ensure resources/ directory inside web-ui has ICU data and certificates
         const auto web_resources = web_dir / "resources";
@@ -462,10 +483,12 @@ void WebSurfaceBridge::DispatchTelemetry() {
         j["is_paused"] = snap.is_paused;
 
         // Navigation & Job
-        const float driven_km = (snap.job_active && snap.odometer_km >= snap.job_start_odometer_km)
+        const bool effective_job_active = snap.job_active || !snap.active_job_db_id.empty();
+        const float driven_km = (effective_job_active && snap.odometer_km >= snap.job_start_odometer_km)
                                     ? (snap.odometer_km - snap.job_start_odometer_km)
                                     : 0.0f;
-        j["job_active"] = snap.job_active;
+        j["job_active"] = effective_job_active;
+        j["is_resumed_job"] = (snap.active_job_sync_status.find("Resumed") != std::string::npos);
         j["cargo"] = snap.cargo_name;
         j["cargo_mass_kg"] = snap.cargo_mass_kg;
         j["city_src"] = snap.origin_city;

@@ -91,6 +91,7 @@ export interface TelemetryData {
   air_pressure?: number;
 
   job_active: boolean;
+  is_resumed_job?: boolean;
   cargo: string;
   cargo_mass_kg: number;
   city_src: string;

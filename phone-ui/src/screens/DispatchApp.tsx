@@ -83,6 +83,12 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
 
   const hasReceipt = Boolean(telemetry.has_last_job_receipt);
   const hasMatchedFleet = Boolean(telemetry.has_matched_fleet && telemetry.fleet_number);
+  const hasActiveJob = Boolean(
+    telemetry.job_active || (telemetry.active_job_db_id && telemetry.active_job_db_id !== '0')
+  );
+  const isResumedJob = Boolean(
+    telemetry.is_resumed_job || telemetry.active_job_sync_status?.toLowerCase().includes('resumed')
+  );
 
   return (
     <div
@@ -139,13 +145,13 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
             fontWeight: 800,
             padding: '2px 7px',
             borderRadius: 6,
-            backgroundColor: telemetry.job_active
-              ? 'rgba(251, 191, 36, 0.18)'
+            backgroundColor: hasActiveJob
+              ? (isResumedJob ? 'rgba(56, 189, 248, 0.18)' : 'rgba(251, 191, 36, 0.18)')
               : 'rgba(56, 189, 248, 0.15)',
-            color: telemetry.job_active ? '#fbbf24' : '#38bdf8',
+            color: hasActiveJob ? (isResumedJob ? '#38bdf8' : '#fbbf24') : '#38bdf8',
           }}
         >
-          {telemetry.job_active ? 'ONGOING' : 'STANDBY'}
+          {hasActiveJob ? (isResumedJob ? 'RESUMED' : 'ONGOING') : 'STANDBY'}
         </span>
       </div>
 
@@ -175,7 +181,7 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
             transition: 'all 0.16s ease',
           }}
         >
-          {telemetry.job_active ? 'Kontrak Aktif' : 'Status Dispatch'}
+          {hasActiveJob ? (isResumedJob ? 'Kontrak Dilanjutkan' : 'Kontrak Aktif') : 'Status Dispatch'}
         </button>
         <button
           onClick={() => setTab('receipt')}
@@ -206,7 +212,7 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
           }}
         >
           {tab === 'waybill' ? (
-            !telemetry.job_active ? (
+            !hasActiveJob ? (
               /* ============================================================
                * STANDBY / CAB FREE ROAM VIEW (RICH PRE-FLIGHT & RULES HUB)
                * ============================================================ */
@@ -496,6 +502,21 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
                       </span>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      {isResumedJob && (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 800,
+                            padding: '2px 6px',
+                            borderRadius: 5,
+                            backgroundColor: 'rgba(56, 189, 248, 0.2)',
+                            color: '#38bdf8',
+                            border: '1px solid rgba(56, 189, 248, 0.4)',
+                          }}
+                        >
+                          DILANJUTKAN
+                        </span>
+                      )}
                       {telemetry.is_special_job && (
                         <span
                           style={{

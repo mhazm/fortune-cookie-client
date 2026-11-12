@@ -511,6 +511,12 @@ SCSAPI_VOID OnChannelBatteryVoltage(
     });
 }
 
+static bool g_has_pos_baseline = false;
+static double g_last_pos_x = 0.0;
+static double g_last_pos_y = 0.0;
+static double g_last_pos_z = 0.0;
+static std::chrono::steady_clock::time_point g_last_pos_sample_time = std::chrono::steady_clock::now();
+
 SCSAPI_VOID OnChannelWorldPlacement(
     const scs_string_t /*name*/,
     const scs_u32_t /*index*/,
@@ -529,14 +535,72 @@ SCSAPI_VOID OnChannelWorldPlacement(
     const float pitch_deg = placement.orientation.pitch * 360.0f;
     const float roll_deg = placement.orientation.roll * 360.0f;
 
+    const auto now = std::chrono::steady_clock::now();
+
     nismara::core::TelemetryState::Instance().Write(
-        [placement, heading_deg, pitch_deg, roll_deg](nismara::core::TelemetrySnapshot& s) {
+        [placement, heading_deg, pitch_deg, roll_deg, now](nismara::core::TelemetrySnapshot& s) {
             s.pos_x = placement.position.x;
             s.pos_y = placement.position.y;
             s.pos_z = placement.position.z;
             s.heading_deg = heading_deg;
             s.pitch_deg = pitch_deg;
             s.roll_deg = roll_deg;
+
+            // Only track coordinate displacement while an active delivery is underway and not paused
+            const bool has_active_delivery = s.job_active || !s.active_job_db_id.empty();
+            if (!has_active_delivery || s.is_paused) {
+                g_has_pos_baseline = false;
+                return;
+            }
+
+            // If player took legitimate ferry or train, sync the destination baseline coordinates without violation
+            if (s.hardcore_in_transit) {
+                g_last_pos_x = placement.position.x;
+                g_last_pos_y = placement.position.y;
+                g_last_pos_z = placement.position.z;
+                g_last_pos_sample_time = now;
+                g_has_pos_baseline = true;
+                return;
+            }
+
+            if (!g_has_pos_baseline) {
+                g_last_pos_x = placement.position.x;
+                g_last_pos_y = placement.position.y;
+                g_last_pos_z = placement.position.z;
+                g_last_pos_sample_time = now;
+                g_has_pos_baseline = true;
+                return;
+            }
+
+            const float dt_sec = std::chrono::duration<float>(now - g_last_pos_sample_time).count();
+            if (dt_sec >= 1.0f) {
+                const double dx = placement.position.x - g_last_pos_x;
+                const double dz = placement.position.z - g_last_pos_z;
+                const double dist_2d_m = std::sqrt(dx * dx + dz * dz);
+                const float apparent_speed_kmh = static_cast<float>((dist_2d_m / dt_sec) * 3.6);
+
+                // Anti-Teleport Check (Camera 0 / Freecam F9 / command goto):
+                // Commercial semi-truck cannot physically exceed 360 km/h or jump > 300 meters in <= 1-2 seconds.
+                // Any displacement exceeding 300 meters and 360 km/h outside transit is an undeniable teleportation.
+                if (dist_2d_m > 300.0 && apparent_speed_kmh > 360.0f) {
+                    s.hardcore_warp_detected = true;
+                    if (!s.hardcore_disqualified) {
+                        s.hardcore_disqualified = true;
+                        s.hardcore_disqualify_reason = "Teleportasi posisi terdeteksi (Kamera 0/Relokasi tidak sah)";
+                    }
+                    LogToGame(
+                        SCS_LOG_TYPE_warning,
+                        "[NismaraTracker] Teleport detected! Jumped %.1f m in %.2f s (Speed: %.1f km/h)",
+                        dist_2d_m,
+                        dt_sec,
+                        apparent_speed_kmh);
+                }
+
+                g_last_pos_x = placement.position.x;
+                g_last_pos_y = placement.position.y;
+                g_last_pos_z = placement.position.z;
+                g_last_pos_sample_time = now;
+            }
         });
 }
 
@@ -643,21 +707,40 @@ SCSAPI_VOID OnChannelGameTime(
     }
     const uint32_t game_time = value->value_u32.value;
     static auto last_time_sample = std::chrono::steady_clock::now();
+    static int consecutive_warp_ticks = 0;
     const auto now = std::chrono::steady_clock::now();
     const float dt_wall = std::chrono::duration<float>(now - last_time_sample).count();
     last_time_sample = now;
 
     nismara::core::TelemetryState::Instance().Write([game_time, dt_wall](nismara::core::TelemetrySnapshot& s) {
         if (s.job_active && dt_wall >= 1.0f && s.game_time_minutes > 0 && game_time > s.game_time_minutes && !s.is_paused) {
-            const float dt_game_sec = static_cast<float>(game_time - s.game_time_minutes) * 60.0f;
+            const uint32_t delta_minutes = game_time - s.game_time_minutes;
+
+            // 1. Abaikan langsung aktivitas resmi game: Feri, Kereta, atau Tidur (lompatan >= 10 menit)
+            // Tidak bergantung pada kecepatan loading HDD/SSD maupun timer detik dunia nyata
+            if (s.hardcore_in_transit || delta_minutes >= 10) {
+                consecutive_warp_ticks = 0;
+                s.hardcore_in_transit = false;
+                s.game_time_minutes = game_time;
+                g_has_pos_baseline = false;
+                return;
+            }
+
+            // 2. Deteksi cheat 'warp' berkelanjutan (speedhack di mana waktu game dipercepat secara kontinu)
+            const float dt_game_sec = static_cast<float>(delta_minutes) * 60.0f;
             const float time_ratio = dt_game_sec / dt_wall;
-            // Normal ETS2/ATS time scale is 1:19 on highway, 1:3 in cities. Warp cheat or speedhack is > 25.0
+
             if (time_ratio > 26.0f) {
-                s.hardcore_warp_detected = true;
-                if (!s.hardcore_disqualified) {
-                    s.hardcore_disqualified = true;
-                    s.hardcore_disqualify_reason = "Manipulasi waktu permainan (Warp/Speedhack terdeteksi)";
+                consecutive_warp_ticks++;
+                if (consecutive_warp_ticks >= 3) {
+                    s.hardcore_warp_detected = true;
+                    if (!s.hardcore_disqualified) {
+                        s.hardcore_disqualified = true;
+                        s.hardcore_disqualify_reason = "Manipulasi waktu permainan (Warp/Speedhack terdeteksi)";
+                    }
                 }
+            } else {
+                consecutive_warp_ticks = 0;
             }
         }
         s.game_time_minutes = game_time;
@@ -906,19 +989,21 @@ SCSAPI_VOID OnTelemetryConfiguration(
         const bool has_attributes = (info->attributes != nullptr && info->attributes[0].name != nullptr);
         if (!has_attributes) {
             nismara::core::TelemetryState::Instance().Write([](nismara::core::TelemetrySnapshot& s) {
-                s.job_active = false;
-                s.cargo_id.clear();
-                s.cargo_name.clear();
-                s.cargo_mass_kg = 0.0f;
-                s.origin_city.clear();
-                s.origin_company.clear();
-                s.destination_city.clear();
-                s.destination_company.clear();
-                s.contract_deadline_min = 0;
-                s.reward_payout = 0;
-                s.planned_distance_km = 0;
-                s.job_market.clear();
-                s.is_special_job = false;
+                if (s.active_job_db_id.empty()) {
+                    s.job_active = false;
+                    s.cargo_id.clear();
+                    s.cargo_name.clear();
+                    s.cargo_mass_kg = 0.0f;
+                    s.origin_city.clear();
+                    s.origin_company.clear();
+                    s.destination_city.clear();
+                    s.destination_company.clear();
+                    s.contract_deadline_min = 0;
+                    s.reward_payout = 0;
+                    s.planned_distance_km = 0;
+                    s.job_market.clear();
+                    s.is_special_job = false;
+                }
             });
             return;
         }
@@ -971,6 +1056,7 @@ SCSAPI_VOID OnTelemetryConfiguration(
             s.last_job_status = "Active Contract (job_started)";
 
             if (is_new_contract) {
+                g_has_pos_baseline = false;
                 s.job_start_odometer_km = s.odometer_km;
                 s.job_start_timestamp_sec = static_cast<int64_t>(std::time(nullptr));
                 s.job_last_fuel_liters = s.fuel_current;
@@ -1124,6 +1210,42 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             });
             LogToGame(SCS_LOG_TYPE_message, "[NismaraTracker] Traffic fine recorded: %s (%lld)", offence.c_str(), fine_amt);
         }
+        return;
+    }
+
+    if (std::strcmp(info->id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_use_ferry) == 0 ||
+        std::strcmp(info->id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_use_train) == 0) {
+        const bool is_ferry = (std::strcmp(info->id, SCS_TELEMETRY_GAMEPLAY_EVENT_player_use_ferry) == 0);
+        const auto* src_attr = FindNamedAttr(
+            info->attributes,
+            SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_source_name,
+            SCS_U32_NIL,
+            SCS_VALUE_TYPE_string);
+        const std::string src_name = (src_attr && src_attr->value.value_string.value)
+                                         ? src_attr->value.value_string.value
+                                         : "";
+        const auto* tgt_attr = FindNamedAttr(
+            info->attributes,
+            SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_target_name,
+            SCS_U32_NIL,
+            SCS_VALUE_TYPE_string);
+        const std::string tgt_name = (tgt_attr && tgt_attr->value.value_string.value)
+                                         ? tgt_attr->value.value_string.value
+                                         : "";
+        const int64_t cost = GetS64Attribute(info->attributes, SCS_TELEMETRY_GAMEPLAY_EVENT_ATTRIBUTE_pay_amount, 0);
+
+        LogToGame(
+            SCS_LOG_TYPE_message,
+            "[NismaraTracker] In-game transit (%s): %s -> %s (Cost: %lld)",
+            is_ferry ? "Ferry" : "Train",
+            src_name.c_str(),
+            tgt_name.c_str(),
+            cost);
+
+        g_has_pos_baseline = false;
+        nismara::core::TelemetryState::Instance().Write([&](nismara::core::TelemetrySnapshot& s) {
+            s.hardcore_in_transit = true;
+        });
         return;
     }
 

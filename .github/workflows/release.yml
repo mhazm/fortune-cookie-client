@@ -60,12 +60,18 @@ jobs:
         with:
           workspaces: 'nismara-companion/src-tauri -> target'
 
-      # Ensure companion resources folders and placeholder DLL exist across all platforms
+      # Ensure companion resources folders, Ultralight runtime, and placeholder DLL exist across all platforms
       - name: Prepare Companion resources directory
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path "nismara-companion/resources"
-          New-Item -ItemType Directory -Force -Path "nismara-companion/src-tauri/resources"
+          New-Item -ItemType Directory -Force -Path "nismara-companion/src-tauri/resources/runtime"
+          if (Test-Path "vendor/ultralight/bin") {
+            Copy-Item -Path "vendor/ultralight/bin/*" -Destination "nismara-companion/src-tauri/resources/runtime" -Force
+          }
+          if (Test-Path "vendor/ultralight/resources") {
+            Copy-Item -Path "vendor/ultralight/resources/*" -Destination "nismara-companion/src-tauri/resources/runtime" -Force
+          }
           if (!(Test-Path "nismara-companion/resources/NismaraTracker.dll")) {
             New-Item -ItemType File -Force -Path "nismara-companion/resources/NismaraTracker.dll"
           }

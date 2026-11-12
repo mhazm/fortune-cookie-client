@@ -64,6 +64,51 @@ std::string GuessExtensionFromUrl(const std::string& url) {
     return ".webp";
 }
 
+std::string SafeJsonString(const nlohmann::json& j, const char* key, const std::string& def = "") {
+    if (!j.is_object() || !j.contains(key)) return def;
+    const auto& v = j[key];
+    if (v.is_null()) return def;
+    if (v.is_string()) return v.get<std::string>();
+    if (v.is_number()) return std::to_string(v.get<int64_t>());
+    if (v.is_boolean()) return v.get<bool>() ? "true" : "false";
+    return def;
+}
+
+double SafeJsonDouble(const nlohmann::json& j, const char* key, double def = 0.0) {
+    if (!j.is_object() || !j.contains(key)) return def;
+    const auto& v = j[key];
+    if (v.is_null()) return def;
+    if (v.is_number()) return v.get<double>();
+    return def;
+}
+
+int32_t SafeJsonInt32(const nlohmann::json& j, const char* key, int32_t def = 0) {
+    if (!j.is_object() || !j.contains(key)) return def;
+    const auto& v = j[key];
+    if (v.is_null()) return def;
+    if (v.is_number_integer()) return v.get<int32_t>();
+    if (v.is_number()) return static_cast<int32_t>(v.get<double>());
+    return def;
+}
+
+int64_t SafeJsonInt64(const nlohmann::json& j, const char* key, int64_t def = 0) {
+    if (!j.is_object() || !j.contains(key)) return def;
+    const auto& v = j[key];
+    if (v.is_null()) return def;
+    if (v.is_number_integer()) return v.get<int64_t>();
+    if (v.is_number()) return static_cast<int64_t>(v.get<double>());
+    return def;
+}
+
+bool SafeJsonBool(const nlohmann::json& j, const char* key, bool def = false) {
+    if (!j.is_object() || !j.contains(key)) return def;
+    const auto& v = j[key];
+    if (v.is_null()) return def;
+    if (v.is_boolean()) return v.get<bool>();
+    if (v.is_number()) return v.get<int>() != 0;
+    return def;
+}
+
 } // namespace
 
 ApiClient& ApiClient::Instance() {
@@ -999,94 +1044,94 @@ void ApiClient::ExecuteSyncWorker(
         acc.last_sync_timestamp = GetLocalTimeString();
         acc.status_message = "Synced at " + acc.last_sync_timestamp;
 
-        acc.user_id = drv.value("id", "");
-        acc.name = drv.value("name", "Driver");
-        acc.email = drv.value("email", "");
-        acc.image_url = drv.value("image", "");
-        acc.background_url = drv.value("backgroundUrl", "");
-        acc.banner_url = drv.value("bannerUrl", "");
-        acc.discord_id = drv.value("discordId", "");
-        acc.trucky_id = drv.value("truckyId", int64_t{0});
-        acc.steam_id = drv.value("steamId", "");
-        acc.truckersmp_id = drv.value("truckersmpId", "");
+        acc.user_id = SafeJsonString(drv, "id", "");
+        acc.name = SafeJsonString(drv, "name", "Driver");
+        acc.email = SafeJsonString(drv, "email", "");
+        acc.image_url = SafeJsonString(drv, "image", "");
+        acc.background_url = SafeJsonString(drv, "backgroundUrl", "");
+        acc.banner_url = SafeJsonString(drv, "bannerUrl", "");
+        acc.discord_id = SafeJsonString(drv, "discordId", "");
+        acc.trucky_id = SafeJsonInt64(drv, "truckyId", 0);
+        acc.steam_id = SafeJsonString(drv, "steamId", "");
+        acc.truckersmp_id = SafeJsonString(drv, "truckersmpId", "");
 
-        acc.discord_role = drv.value("discordRole", "driver");
-        acc.trucky_rank = drv.value("truckyRank", "Driver");
-        acc.trucky_rank_color = drv.value("truckyRankColor", "#ffffff");
-        acc.trucky_role = drv.value("truckyRole", "Driver");
-        acc.trucky_role_color = drv.value("truckyRoleColor", "#ffffff");
+        acc.discord_role = SafeJsonString(drv, "discordRole", "driver");
+        acc.trucky_rank = SafeJsonString(drv, "truckyRank", "Driver");
+        acc.trucky_rank_color = SafeJsonString(drv, "truckyRankColor", "#ffffff");
+        acc.trucky_role = SafeJsonString(drv, "truckyRole", "Driver");
+        acc.trucky_role_color = SafeJsonString(drv, "truckyRoleColor", "#ffffff");
 
-        acc.level = drv.value("level", 1);
-        acc.xp = drv.value("xp", int64_t{0});
-        acc.nc = drv.value("nc", 0.0);
-        acc.total_nc = drv.value("totalNc", acc.nc);
-        acc.points = drv.value("points", 0);
-        acc.penalty_points = drv.value("penaltyPoints", acc.points);
-        acc.point_price = drv.value("pointPrice", 3000);
-        acc.discount_booster = drv.value("discountBooster", 0);
-        acc.discount_nismara_plus = drv.value("discountNismaraPlus", 0);
-        acc.total_discount = drv.value("totalDiscount", acc.discount_booster + acc.discount_nismara_plus);
-        acc.final_point_price = drv.value("finalPointPrice", std::max(0, acc.point_price - acc.total_discount));
-        acc.safebox_tickets = drv.value("safeboxTickets", 0);
-        acc.max_penalty_tickets = drv.value("maxPenaltyTickets", 10);
-        acc.joined_convoy = drv.value("joinedConvoy", 0);
+        acc.level = SafeJsonInt32(drv, "level", 1);
+        acc.xp = SafeJsonInt64(drv, "xp", 0);
+        acc.nc = SafeJsonDouble(drv, "nc", 0.0);
+        acc.total_nc = SafeJsonDouble(drv, "totalNc", acc.nc);
+        acc.points = SafeJsonInt32(drv, "points", 0);
+        acc.penalty_points = SafeJsonInt32(drv, "penaltyPoints", acc.points);
+        acc.point_price = SafeJsonInt32(drv, "pointPrice", 3000);
+        acc.discount_booster = SafeJsonInt32(drv, "discountBooster", 0);
+        acc.discount_nismara_plus = SafeJsonInt32(drv, "discountNismaraPlus", 0);
+        acc.total_discount = SafeJsonInt32(drv, "totalDiscount", acc.discount_booster + acc.discount_nismara_plus);
+        acc.final_point_price = SafeJsonInt32(drv, "finalPointPrice", std::max(0, acc.point_price - acc.total_discount));
+        acc.safebox_tickets = SafeJsonInt32(drv, "safeboxTickets", 0);
+        acc.max_penalty_tickets = SafeJsonInt32(drv, "maxPenaltyTickets", 10);
+        acc.joined_convoy = SafeJsonInt32(drv, "joinedConvoy", 0);
 
-        acc.is_driver = drv.value("isDriver", true);
-        acc.is_on_leave = drv.value("isOnLeave", false);
-        acc.is_booster = drv.value("isBooster", false);
-        acc.is_guild_member = drv.value("isGuildMember", false);
-        acc.is_tmp_driver = drv.value("isTmpDriver", false);
-        acc.is_haulmp_driver = drv.value("isHaulmpDriver", false);
-        acc.is_best_employee_ets2 = drv.value("isBestEmployeeETS2", false);
-        acc.is_best_employee_ats = drv.value("isBestEmployeeATS", false);
+        acc.is_driver = SafeJsonBool(drv, "isDriver", true);
+        acc.is_on_leave = SafeJsonBool(drv, "isOnLeave", false);
+        acc.is_booster = SafeJsonBool(drv, "isBooster", false);
+        acc.is_guild_member = SafeJsonBool(drv, "isGuildMember", false);
+        acc.is_tmp_driver = SafeJsonBool(drv, "isTmpDriver", false);
+        acc.is_haulmp_driver = SafeJsonBool(drv, "isHaulmpDriver", false);
+        acc.is_best_employee_ets2 = SafeJsonBool(drv, "isBestEmployeeETS2", false);
+        acc.is_best_employee_ats = SafeJsonBool(drv, "isBestEmployeeATS", false);
 
         if (drv.contains("insurance") && drv["insurance"].is_object()) {
             const auto& ins = drv["insurance"];
-            acc.insurance_active = ins.value("status", false);
-            acc.insurance_rating = ins.value("rating", 0);
-            acc.insurance_started_at = ins.value("startedAt", "");
-            acc.insurance_expired_at = ins.value("expiredAt", "");
+            acc.insurance_active = SafeJsonBool(ins, "status", false);
+            acc.insurance_rating = SafeJsonInt32(ins, "rating", 0);
+            acc.insurance_started_at = SafeJsonString(ins, "startedAt", "");
+            acc.insurance_expired_at = SafeJsonString(ins, "expiredAt", "");
         }
 
         if (drv.contains("nismaraplus") && drv["nismaraplus"].is_object()) {
             const auto& np = drv["nismaraplus"];
-            acc.nismara_plus_active = np.value("status", false);
-            acc.nismara_plus_started_at = np.value("startedAt", "");
-            acc.nismara_plus_expired_at = np.value("expiredAt", "");
+            acc.nismara_plus_active = SafeJsonBool(np, "status", false);
+            acc.nismara_plus_started_at = SafeJsonString(np, "startedAt", "");
+            acc.nismara_plus_expired_at = SafeJsonString(np, "expiredAt", "");
         }
 
         if (drv.contains("ncBoost") && drv["ncBoost"].is_object()) {
             const auto& boost = drv["ncBoost"];
-            acc.nc_boost_active = boost.value("active", false);
-            acc.nc_boost_multiplier = boost.value("multiplier", 0.0f);
-            acc.nc_boost_voucher_title = boost.value("voucherTitle", "");
-            acc.nc_boost_voucher_code = boost.value("voucherCode", "");
-            acc.nc_boost_expired_at = boost.value("expiredAt", "");
+            acc.nc_boost_active = SafeJsonBool(boost, "active", false);
+            acc.nc_boost_multiplier = static_cast<float>(SafeJsonDouble(boost, "multiplier", 0.0));
+            acc.nc_boost_voucher_title = SafeJsonString(boost, "voucherTitle", "");
+            acc.nc_boost_voucher_code = SafeJsonString(boost, "voucherCode", "");
+            acc.nc_boost_expired_at = SafeJsonString(boost, "expiredAt", "");
         }
 
         if (drv.contains("topManager") && drv["topManager"].is_object()) {
             const auto& tm = drv["topManager"];
-            acc.top_manager_active = tm.value("status", false);
-            acc.top_manager_month = tm.value("month", "");
-            acc.top_manager_expired_at = tm.value("expiredAt", "");
+            acc.top_manager_active = SafeJsonBool(tm, "status", false);
+            acc.top_manager_month = SafeJsonString(tm, "month", "");
+            acc.top_manager_expired_at = SafeJsonString(tm, "expiredAt", "");
         }
 
         acc.garage = DriverGarageSummary{};
         if (drv.contains("garage") && drv["garage"].is_object()) {
             const auto& g = drv["garage"];
             acc.garage.has_garage = true;
-            acc.garage.status = g.value("status", "operational");
-            acc.garage.fleet_slot = g.value("fleetSlot", 1);
-            acc.garage.fleet_slot_used = g.value("fleetSlotUsed", 0);
-            acc.garage.fleet_slot_level = g.value("fleetSlotLevel", acc.garage.fleet_slot);
-            acc.garage.fuel_stock = g.value("fuelStock", 0.0);
-            acc.garage.fuel_capacity = g.value("fuelCapacity", 2000.0);
+            acc.garage.status = SafeJsonString(g, "status", "operational");
+            acc.garage.fleet_slot = SafeJsonInt32(g, "fleetSlot", 1);
+            acc.garage.fleet_slot_used = SafeJsonInt32(g, "fleetSlotUsed", 0);
+            acc.garage.fleet_slot_level = SafeJsonInt32(g, "fleetSlotLevel", acc.garage.fleet_slot);
+            acc.garage.fuel_stock = SafeJsonDouble(g, "fuelStock", 0.0);
+            acc.garage.fuel_capacity = SafeJsonDouble(g, "fuelCapacity", 2000.0);
             const int32_t derived_fuel_level = std::max(
                 1, static_cast<int32_t>(std::round((acc.garage.fuel_capacity - 1000.0) / 1000.0)));
-            acc.garage.fuel_tank_level = g.value("fuelTankLevel", derived_fuel_level);
-            acc.garage.safebox_stock = g.value("safeboxStock", 0);
-            acc.garage.safebox_level = g.value("safeboxLevel", 1);
-            acc.garage.max_penalty_tickets = g.value("maxPenaltyTickets", 10 + (acc.garage.safebox_level - 1) * 5);
+            acc.garage.fuel_tank_level = SafeJsonInt32(g, "fuelTankLevel", derived_fuel_level);
+            acc.garage.safebox_stock = SafeJsonInt32(g, "safeboxStock", 0);
+            acc.garage.safebox_level = SafeJsonInt32(g, "safeboxLevel", 1);
+            acc.garage.max_penalty_tickets = SafeJsonInt32(g, "maxPenaltyTickets", 10 + (acc.garage.safebox_level - 1) * 5);
 
             // Calculate exact Nismara operational cost fallbacks when server response omits them
             double fallback_fleet_op = 0.0;
@@ -1139,11 +1184,7 @@ void ApiClient::ExecuteSyncWorker(
                 acc.garage.operational_cost = fallback_total_op;
             }
 
-            if (g.contains("next_payment_date") && g["next_payment_date"].is_string()) {
-                acc.garage.next_payment_date = g["next_payment_date"].get<std::string>();
-            } else if (g.contains("nextPaymentDate") && g["nextPaymentDate"].is_string()) {
-                acc.garage.next_payment_date = g["nextPaymentDate"].get<std::string>();
-            }
+            acc.garage.next_payment_date = SafeJsonString(g, "next_payment_date", SafeJsonString(g, "nextPaymentDate", ""));
         }
 
         acc.fleets.clear();
@@ -1153,70 +1194,61 @@ void ApiClient::ExecuteSyncWorker(
                     continue;
                 }
                 DriverFleetVehicle fv;
-                fv.id = item.value("id", "");
-                fv.mongo_id = item.value("mongoId", "");
-                fv.fleet_number = item.value("fleetNumber", "");
-                fv.fleet_name = item.value("fleetName", "");
-                fv.custom_name = item.value("customName", "");
-                fv.game_id = item.value("gameId", "1");
-                fv.odometer = item.value("odometer", 0.0);
-                fv.wheels = item.value("wheels", "4x2");
-                fv.status = item.value("status", "active");
-                fv.has_insurance = item.value("hasInsurance", false);
+                fv.id = SafeJsonString(item, "id", "");
+                fv.mongo_id = SafeJsonString(item, "mongoId", "");
+                fv.fleet_number = SafeJsonString(item, "fleetNumber", "");
+                fv.fleet_name = SafeJsonString(item, "fleetName", "");
+                fv.custom_name = SafeJsonString(item, "customName", "");
+                fv.game_id = SafeJsonString(item, "gameId", "1");
+                fv.odometer = SafeJsonDouble(item, "odometer", 0.0);
+                fv.wheels = SafeJsonString(item, "wheels", "4x2");
+                fv.status = SafeJsonString(item, "status", "active");
+                fv.has_insurance = SafeJsonBool(item, "hasInsurance", false);
                 fv.maintenance_needed =
-                    item.value("maintenanceNeeded", item.value("maintenance_needed", false));
-                fv.is_assigned_driver = item.value("isAssignedDriver", true);
-                fv.in_game_id = item.value("inGameId", "");
-                fv.model_name = item.value("modelName", "");
-                fv.model_type = item.value("modelType", "truck");
-                fv.photo_url = item.value("photoUrl", "");
-                fv.brand_name = item.value("brandName", "");
+                    SafeJsonBool(item, "maintenanceNeeded", SafeJsonBool(item, "maintenance_needed", false));
+                fv.is_assigned_driver = SafeJsonBool(item, "isAssignedDriver", true);
+                fv.in_game_id = SafeJsonString(item, "inGameId", "");
+                fv.model_name = SafeJsonString(item, "modelName", "");
+                fv.model_type = SafeJsonString(item, "modelType", "truck");
+                fv.photo_url = SafeJsonString(item, "photoUrl", "");
+                fv.brand_name = SafeJsonString(item, "brandName", "");
 
-                if (item.contains("maintenanceStartDate") && item["maintenanceStartDate"].is_string()) {
-                    fv.maintenance_start_date = item["maintenanceStartDate"].get<std::string>();
-                } else if (item.contains("maintenance_start_date") && item["maintenance_start_date"].is_string()) {
-                    fv.maintenance_start_date = item["maintenance_start_date"].get<std::string>();
-                }
+                fv.maintenance_start_date = SafeJsonString(item, "maintenanceStartDate", SafeJsonString(item, "maintenance_start_date", ""));
+                fv.maintenance_end_date = SafeJsonString(item, "maintenanceEndDate", SafeJsonString(item, "maintenance_end_date", ""));
 
-                if (item.contains("maintenanceEndDate") && item["maintenanceEndDate"].is_string()) {
-                    fv.maintenance_end_date = item["maintenanceEndDate"].get<std::string>();
-                } else if (item.contains("maintenance_end_date") && item["maintenance_end_date"].is_string()) {
-                    fv.maintenance_end_date = item["maintenance_end_date"].get<std::string>();
-                }
-
-                fv.jobs_count = item.value("jobsCount", item.value("jobs_count", 0));
-                fv.total_revenue = item.value("totalRevenue", item.value("total_revenue", 0.0));
-                fv.total_fuel_used = item.value("totalFuelUsed", item.value("total_fuel_used", 0.0));
-                fv.total_damage_cost = item.value("totalDamageCost", item.value("total_damage_cost", 0.0));
+                fv.jobs_count = SafeJsonInt32(item, "jobsCount", SafeJsonInt32(item, "jobs_count", 0));
+                fv.total_revenue = SafeJsonDouble(item, "totalRevenue", SafeJsonDouble(item, "total_revenue", 0.0));
+                fv.total_fuel_used = SafeJsonDouble(item, "totalFuelUsed", SafeJsonDouble(item, "total_fuel_used", 0.0));
+                fv.total_damage_cost = SafeJsonDouble(item, "totalDamageCost", SafeJsonDouble(item, "total_damage_cost", 0.0));
 
                 if (item.contains("wear") && item["wear"].is_object()) {
                     const auto& w = item["wear"];
-                    fv.unfix_engine = w.value("unfixEngine", 0.0f);
-                    fv.unfix_transmission = w.value("unfixTransmission", 0.0f);
-                    fv.unfix_brakes = w.value("unfixBrakes", 0.0f);
-                    fv.unfix_tires = w.value("unfixTires", 0.0f);
+                    fv.unfix_engine = static_cast<float>(SafeJsonDouble(w, "unfixEngine", 0.0));
+                    fv.unfix_transmission = static_cast<float>(SafeJsonDouble(w, "unfixTransmission", 0.0));
+                    fv.unfix_brakes = static_cast<float>(SafeJsonDouble(w, "unfixBrakes", 0.0));
+                    fv.unfix_tires = static_cast<float>(SafeJsonDouble(w, "unfixTires", 0.0));
                 }
 
                 if (item.contains("maintenance") && item["maintenance"].is_object()) {
                     const auto& m = item["maintenance"];
-                    fv.maint_engine = m.value("engine", 50000.0);
-                    fv.maint_tires = m.value("tires", 20000.0);
-                    fv.maint_transmission = m.value("transmission", 70000.0);
-                    fv.maint_brakes = m.value("brakes", 35000.0);
+                    fv.maint_engine = SafeJsonDouble(m, "engine", 50000.0);
+                    fv.maint_tires = SafeJsonDouble(m, "tires", 20000.0);
+                    fv.maint_transmission = SafeJsonDouble(m, "transmission", 70000.0);
+                    fv.maint_brakes = SafeJsonDouble(m, "brakes", 35000.0);
                 }
 
                 if (item.contains("lastMaintenance") && item["lastMaintenance"].is_object()) {
                     const auto& lm = item["lastMaintenance"];
-                    fv.last_maint_engine = lm.value("engine", 0.0);
-                    fv.last_maint_tires = lm.value("tires", 0.0);
-                    fv.last_maint_transmission = lm.value("transmission", 0.0);
-                    fv.last_maint_brakes = lm.value("brakes", 0.0);
+                    fv.last_maint_engine = SafeJsonDouble(lm, "engine", 0.0);
+                    fv.last_maint_tires = SafeJsonDouble(lm, "tires", 0.0);
+                    fv.last_maint_transmission = SafeJsonDouble(lm, "transmission", 0.0);
+                    fv.last_maint_brakes = SafeJsonDouble(lm, "brakes", 0.0);
                 } else if (item.contains("last_maintenance") && item["last_maintenance"].is_object()) {
                     const auto& lm = item["last_maintenance"];
-                    fv.last_maint_engine = lm.value("engine", 0.0);
-                    fv.last_maint_tires = lm.value("tires", 0.0);
-                    fv.last_maint_transmission = lm.value("transmission", 0.0);
-                    fv.last_maint_brakes = lm.value("brakes", 0.0);
+                    fv.last_maint_engine = SafeJsonDouble(lm, "engine", 0.0);
+                    fv.last_maint_tires = SafeJsonDouble(lm, "tires", 0.0);
+                    fv.last_maint_transmission = SafeJsonDouble(lm, "transmission", 0.0);
+                    fv.last_maint_brakes = SafeJsonDouble(lm, "brakes", 0.0);
                 }
 
                 acc.fleets.push_back(std::move(fv));
@@ -1226,17 +1258,22 @@ void ApiClient::ExecuteSyncWorker(
 
     if (drv.contains("ongoingJob") && drv["ongoingJob"].is_object()) {
         const auto& oj = drv["ongoingJob"];
-        const std::string oj_id = oj.value("jobId", "");
-        const double oj_price = oj.value("lockedCargoPrice", 1.5);
-        const bool oj_special = oj.value("isSpecialContract", false);
+        const std::string oj_id = SafeJsonString(oj, "jobId", "");
+        const double oj_price = SafeJsonDouble(oj, "lockedCargoPrice", 1.5);
+        const bool oj_special = SafeJsonBool(oj, "isSpecialContract", false);
+        const std::string oj_src = SafeJsonString(oj, "sourceCity", "");
+        const std::string oj_dst = SafeJsonString(oj, "destinationCity", "");
+        const std::string oj_cargo = SafeJsonString(oj, "cargoName", "");
         if (!oj_id.empty()) {
             TelemetryState::Instance().Write([&](TelemetrySnapshot& s) {
-                if (s.active_job_db_id.empty()) {
-                    s.active_job_db_id = oj_id;
-                    s.active_job_locked_price = oj_price;
-                    s.active_job_is_special = oj_special;
-                    s.active_job_sync_status = "Synced Ongoing Job #" + oj_id;
-                }
+                s.active_job_db_id = oj_id;
+                s.active_job_locked_price = oj_price;
+                s.active_job_is_special = oj_special;
+                s.active_job_sync_status = "Resumed Job #" + oj_id;
+                s.job_active = true;
+                if (!oj_src.empty()) s.origin_city = oj_src;
+                if (!oj_dst.empty()) s.destination_city = oj_dst;
+                if (!oj_cargo.empty()) s.cargo_name = oj_cargo;
             });
         }
     }

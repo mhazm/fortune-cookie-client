@@ -342,6 +342,7 @@ struct TelemetrySnapshot {
     int32_t hardcore_rest_overdue_minutes{0};
     bool hardcore_auto_park_used{false};
     bool hardcore_warp_detected{false};
+    bool hardcore_in_transit{false};
     float hardcore_last_wallclock_sec{0.0f};
     uint32_t hardcore_last_game_time_min{0};
     float hardcore_last_cvar_check_time{0.0f};

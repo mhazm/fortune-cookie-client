@@ -22,17 +22,20 @@ cmake-build-*/
 *.o
 *.exe
 
-# Allow bundled standalone plugin binaries for Companion app distribution
+# Allow bundled standalone plugin binaries and Ultralight runtime for Companion app distribution
 !nismara-companion/resources/*.dll
 !nismara-companion/resources/*.so
 !nismara-companion/resources/*.dylib
 !nismara-companion/src-tauri/resources/*.dll
 !nismara-companion/src-tauri/resources/*.so
 !nismara-companion/src-tauri/resources/*.dylib
+!nismara-companion/src-tauri/resources/runtime/**
 
-# Allow Ultralight build import libraries and core ICU resources
+# Allow Ultralight build import libraries, runtime DLLs, and core ICU resources
+!vendor/ultralight/bin/
+!vendor/ultralight/bin/**
 !vendor/ultralight/lib/*.lib
-!vendor/ultralight/resources/*.dat
+!vendor/ultralight/resources/**
 
 # ==========================================
 # Node.js & Vite Frontend
@@ -68,6 +71,8 @@ target/
 # ==========================================
 *.dat
 *.log
+!vendor/ultralight/resources/*.dat
+!nismara-companion/src-tauri/resources/runtime/*.dat
 imgui.ini
 scratch/
 

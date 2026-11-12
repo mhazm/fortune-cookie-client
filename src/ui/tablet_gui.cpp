@@ -2351,7 +2351,8 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
 
     if (job_tab_ == 0) {
         // --- TAB 0: WAYBILL RUTE ---
-        if (!snap.job_active) {
+        const bool has_active_job = snap.job_active || !snap.active_job_db_id.empty();
+        if (!has_active_job) {
             if (ImGui::BeginChild("##NoJobCard", ImVec2(0.0f, 185.0f), true)) {
                 ImGui::PushFont(font_semibold_);
                 ImGui::TextColored(ImVec4(0.98f, 0.75f, 0.14f, 1.0f), "TIDAK ADA PEKERJAAN AKTIF");
@@ -2411,12 +2412,17 @@ void TabletGui::RenderAppDispatch(const nismara::core::TelemetrySnapshot& snap) 
         // 2. Cargo Manifest Card
         if (ImGui::BeginChild("##JobManifestCard", ImVec2(0.0f, 168.0f), true)) {
             ImGui::PushFont(font_semibold_);
+            const bool is_resumed = (snap.active_job_sync_status.find("Resumed") != std::string::npos);
             if (!snap.active_job_db_id.empty()) {
-                ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "MANIFEST KARGO [JOB #%s]", snap.active_job_db_id.c_str());
+                if (is_resumed) {
+                    ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "MANIFEST KARGO [JOB #%s - DILANJUTKAN]", snap.active_job_db_id.c_str());
+                } else {
+                    ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "MANIFEST KARGO [JOB #%s]", snap.active_job_db_id.c_str());
+                }
             } else {
                 ImGui::TextColored(ImVec4(0.22f, 0.74f, 0.97f, 1.0f), "MANIFEST KARGO LOGISTIK");
             }
-            ImGui::TextWrapped("%s", snap.cargo_name.c_str());
+            ImGui::TextWrapped("%s", snap.cargo_name.empty() ? "Kargo Logistik Nismara" : snap.cargo_name.c_str());
             ImGui::PopFont();
 
             ImGui::Text("Muatan: %.1f Ton  |  Pasar: %s", snap.cargo_mass_kg / 1000.0f, snap.job_market.c_str());
