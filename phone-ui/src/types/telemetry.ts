@@ -99,6 +99,7 @@ export interface TelemetryData {
   city_dst: string;
   company_dst: string;
   distance_km: number;
+  driven_distance_km?: number;
   planned_distance_km: number;
   nav_distance_km: number;
   job_market?: string;
@@ -106,6 +107,7 @@ export interface TelemetryData {
   active_job_db_id?: string;
   active_job_locked_price?: number;
   active_job_sync_status?: string;
+  checkpoint_status?: string;
   job_fuel_consumed_liters?: number;
   job_max_speed_kmh?: number;
   job_fines_count?: number;

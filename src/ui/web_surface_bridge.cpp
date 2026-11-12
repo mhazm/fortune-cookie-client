@@ -484,11 +484,15 @@ void WebSurfaceBridge::DispatchTelemetry() {
 
         // Navigation & Job
         const bool effective_job_active = snap.job_active || !snap.active_job_db_id.empty();
-        const float driven_km = (effective_job_active && snap.odometer_km >= snap.job_start_odometer_km)
-                                    ? (snap.odometer_km - snap.job_start_odometer_km)
-                                    : 0.0f;
+        const float driven_km = (snap.job_driven_distance_km > 0.0f)
+                                    ? snap.job_driven_distance_km
+                                    : ((effective_job_active && snap.odometer_km >= snap.job_start_odometer_km)
+                                           ? (snap.odometer_km - snap.job_start_odometer_km)
+                                           : 0.0f);
         j["job_active"] = effective_job_active;
         j["is_resumed_job"] = (snap.active_job_sync_status.find("Resumed") != std::string::npos);
+        j["checkpoint_status"] = snap.checkpoint_status;
+        j["driven_distance_km"] = driven_km;
         j["cargo"] = snap.cargo_name;
         j["cargo_mass_kg"] = snap.cargo_mass_kg;
         j["city_src"] = snap.origin_city;

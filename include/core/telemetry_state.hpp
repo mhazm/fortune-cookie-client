@@ -184,6 +184,15 @@ struct DriverAccountProfile {
 };
 
 /**
+ * @brief Compact breadcrumb coordinate point along the vehicle delivery route.
+ */
+struct RoutePoint {
+    int32_t x{0};
+    int32_t z{0};
+    uint8_t spd{0};
+};
+
+/**
  * @brief Thread-safe snapshot of ETS2/ATS live telemetry and active job state.
  */
 struct TelemetrySnapshot {
@@ -293,6 +302,23 @@ struct TelemetrySnapshot {
     float job_fuel_consumed_liters{0.0f};
     float job_max_speed_kmh{0.0f};
     std::vector< std::pair<std::string, int64_t> > job_fines{}; // (offence, amount)
+
+    // Checkpoint & Multi-Session Trip Progress
+    float job_resumed_driven_distance_km{0.0f};
+    float job_session_start_odometer_km{0.0f};
+    float job_driven_distance_km{0.0f};
+    float last_checkpoint_driven_distance_km{0.0f};
+    float last_checkpoint_time_sec{0.0f};
+    std::string checkpoint_status{"None"};
+    float checkpoint_status_timer{0.0f};
+
+    // Breadcrumb Polyline Route Coordinates
+    std::vector<RoutePoint> job_route_points{};
+    std::vector<RoutePoint> job_pending_route_points{};
+    double route_last_recorded_x{0.0};
+    double route_last_recorded_z{0.0};
+    float route_last_recorded_heading{0.0f};
+    bool route_has_initial_point{false};
 
     // Cumulative Job Damage Tracking (0.0f = 0%, 1.0f = 100%)
     // Preserves and accumulates all damage taken during the job even if repaired mid-trip!

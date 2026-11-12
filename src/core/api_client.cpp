@@ -208,6 +208,12 @@ void ApiClient::Shutdown() {
     if (job_thread_.joinable()) {
         job_thread_.join();
     }
+    if (checkpoint_thread_.joinable()) {
+        checkpoint_thread_.join();
+    }
+    if (live_telemetry_thread_.joinable()) {
+        live_telemetry_thread_.join();
+    }
     if (points_thread_.joinable()) {
         points_thread_.join();
     }
@@ -340,6 +346,18 @@ void ApiClient::PostJobCompleteAsync(const JobCompleteRequest& req) {
         {"fines", fines_arr}
     };
 
+    if (!req.route_path.empty()) {
+        auto pts_arr = nlohmann::json::array();
+        for (const auto& pt : req.route_path) {
+            pts_arr.push_back({
+                {"x", pt.x},
+                {"z", pt.z},
+                {"spd", pt.spd}
+            });
+        }
+        body["routePath"] = pts_arr;
+    }
+
     std::lock_guard<std::mutex> lock(thread_mutex_);
     if (job_thread_.joinable()) {
         job_thread_.join();
@@ -380,6 +398,218 @@ void ApiClient::PostJobCancelAsync(const JobCancelRequest& req) {
         "/api/tracker/jobs/cancel",
         body.dump(),
         "cancel");
+}
+
+void ApiClient::PostJobCheckpointAsync(const JobCheckpointRequest& req) {
+    if (shutting_down_.load() || is_checkpointing_.load()) {
+        return;
+    }
+    const auto cfg = ConfigManager::Instance().GetConfig();
+    if (cfg.driver_token.empty() || req.job_id.empty()) {
+        return;
+    }
+
+    nlohmann::json body = {
+        {"jobId", req.job_id},
+        {"gameId", req.game_id},
+        {"drivenDistanceKm", req.driven_distance_km},
+        {"fuelUsedLiters", req.fuel_used_liters},
+        {"maxSpeedKmh", req.max_speed_kmh},
+        {"accumVehicleDamage", req.accum_vehicle_damage},
+        {"accumTrailerDamage", req.accum_trailer_damage},
+        {"accumCargoDamage", req.accum_cargo_damage},
+        {"durationSeconds", req.duration_seconds},
+        {"lastPosX", req.last_pos_x},
+        {"lastPosY", req.last_pos_y},
+        {"lastPosZ", req.last_pos_z},
+        {"hardcoreDisqualified", req.hardcore_disqualified},
+        {"hardcoreDisqualifyReason", req.hardcore_disqualify_reason}
+    };
+
+    auto fines_arr = nlohmann::json::array();
+    for (const auto& [off, amt] : req.fines) {
+        fines_arr.push_back({
+            {"offence", off},
+            {"amount", amt}
+        });
+    }
+    body["fines"] = fines_arr;
+
+    if (!req.new_route_points.empty()) {
+        auto pts_arr = nlohmann::json::array();
+        for (const auto& pt : req.new_route_points) {
+            pts_arr.push_back({
+                {"x", pt.x},
+                {"z", pt.z},
+                {"spd", pt.spd}
+            });
+        }
+        body["newRoutePoints"] = pts_arr;
+    }
+
+    std::lock_guard<std::mutex> lock(thread_mutex_);
+    if (checkpoint_thread_.joinable()) {
+        checkpoint_thread_.join();
+    }
+    is_checkpointing_.store(true);
+    checkpoint_thread_ = std::thread(
+        &ApiClient::ExecuteJobCheckpointWorker,
+        this,
+        "/api/tracker/jobs/checkpoint",
+        body.dump());
+}
+
+void ApiClient::PostLiveTelemetryAsync(const LiveTelemetryRequest& req) {
+    if (shutting_down_.load() || is_posting_live_.load()) {
+        return;
+    }
+    const auto cfg = ConfigManager::Instance().GetConfig();
+    if (cfg.driver_token.empty()) {
+        return;
+    }
+
+    nlohmann::json body = {
+        {"gameId", req.game_id},
+        {"fleetNumber", req.fleet_number},
+        {"x", req.x},
+        {"y", req.y},
+        {"z", req.z},
+        {"speed", req.speed},
+        {"heading", req.heading},
+        {"gear", req.gear},
+        {"drivenDistanceKm", req.driven_distance_km},
+        {"isPaused", req.is_paused},
+        {"serverType", req.server_type}
+    };
+
+    std::lock_guard<std::mutex> lock(thread_mutex_);
+    if (live_telemetry_thread_.joinable()) {
+        live_telemetry_thread_.join();
+    }
+    is_posting_live_.store(true);
+    live_telemetry_thread_ = std::thread(
+        &ApiClient::ExecuteLiveTelemetryWorker,
+        this,
+        "/api/tracker/telemetry/live",
+        body.dump());
+}
+
+void ApiClient::EmergencyFlushCheckpoint() {
+    try {
+        const auto snap = TelemetryState::Instance().GetSnapshot();
+        if (snap.active_job_db_id.empty()) {
+            return;
+        }
+
+        const auto cfg = ConfigManager::Instance().GetConfig();
+        if (cfg.driver_token.empty()) {
+            return;
+        }
+
+        nlohmann::json body = {
+            {"jobId", snap.active_job_db_id},
+            {"gameId", (snap.game_id == "ats" || snap.game_id == "amtrucks") ? "2" : "1"},
+            {"drivenDistanceKm", snap.job_driven_distance_km},
+            {"fuelUsedLiters", snap.job_fuel_consumed_liters},
+            {"maxSpeedKmh", snap.job_max_speed_kmh},
+            {"accumVehicleDamage", snap.job_accum_vehicle_damage},
+            {"accumTrailerDamage", snap.job_accum_trailer_damage},
+            {"accumCargoDamage", snap.job_accum_cargo_damage},
+            {"lastPosX", snap.pos_x},
+            {"lastPosY", snap.pos_y},
+            {"lastPosZ", snap.pos_z},
+            {"hardcoreDisqualified", snap.hardcore_disqualified},
+            {"hardcoreDisqualifyReason", snap.hardcore_disqualify_reason}
+        };
+
+        const int64_t now_sec = static_cast<int64_t>(std::time(nullptr));
+        body["durationSeconds"] = (snap.job_start_timestamp_sec > 0 && now_sec > snap.job_start_timestamp_sec)
+                                      ? (now_sec - snap.job_start_timestamp_sec)
+                                      : 60;
+
+        auto fines_arr = nlohmann::json::array();
+        for (const auto& [off, amt] : snap.job_fines) {
+            fines_arr.push_back({{"offence", off}, {"amount", amt}});
+        }
+        body["fines"] = fines_arr;
+
+        if (!snap.job_pending_route_points.empty()) {
+            auto pts_arr = nlohmann::json::array();
+            for (const auto& pt : snap.job_pending_route_points) {
+                pts_arr.push_back({{"x", pt.x}, {"z", pt.z}, {"spd", pt.spd}});
+            }
+            body["newRoutePoints"] = pts_arr;
+        }
+
+        const std::string json_body = body.dump();
+        const std::string full_url = cfg.api_base_url + "/api/tracker/jobs/checkpoint";
+        const std::wstring wide_url = Utf8ToWide(full_url);
+
+        URL_COMPONENTS url_comp{};
+        url_comp.dwStructSize = sizeof(url_comp);
+        wchar_t host_name[256] = {0};
+        wchar_t url_path[1024] = {0};
+        url_comp.lpszHostName = host_name;
+        url_comp.dwHostNameLength = 256;
+        url_comp.lpszUrlPath = url_path;
+        url_comp.dwUrlPathLength = 1024;
+
+        if (!WinHttpCrackUrl(wide_url.c_str(), static_cast<DWORD>(wide_url.size()), 0, &url_comp)) {
+            return;
+        }
+
+        HINTERNET h_session = WinHttpOpen(
+            L"NismaraTracker/1.0 (Windows x64; Emergency Flush)",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS,
+            0);
+        if (!h_session) return;
+
+        // Tight 1.5 second timeout during emergency process crash
+        WinHttpSetTimeouts(h_session, 1500, 1500, 1500, 1500);
+
+        HINTERNET h_connect = WinHttpConnect(h_session, host_name, url_comp.nPort, 0);
+        if (!h_connect) {
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        const DWORD request_flags = (url_comp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET h_request = WinHttpOpenRequest(
+            h_connect,
+            L"POST",
+            url_path,
+            nullptr,
+            WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            request_flags);
+
+        if (!h_request) {
+            WinHttpCloseHandle(h_connect);
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        std::wstring headers = L"Content-Type: application/json\r\n";
+        headers += L"Authorization: Bearer " + Utf8ToWide(cfg.driver_token) + L"\r\n";
+        headers += L"X-Plugin-Version: 1.0.3-beta\r\n";
+
+        WinHttpSendRequest(
+            h_request,
+            headers.c_str(),
+            static_cast<DWORD>(headers.size()),
+            const_cast<char*>(json_body.data()),
+            static_cast<DWORD>(json_body.size()),
+            static_cast<DWORD>(json_body.size()),
+            0);
+
+        WinHttpReceiveResponse(h_request, nullptr);
+
+        WinHttpCloseHandle(h_request);
+        WinHttpCloseHandle(h_connect);
+        WinHttpCloseHandle(h_session);
+    } catch (...) {}
 }
 
 void ApiClient::PayPenaltyPointsAsync(int32_t points_to_pay) {
@@ -754,6 +984,32 @@ void ApiClient::ExecuteJobPostWorker(
                     s.hardcore_disqualify_reason = hc_reason;
                 }
             }
+
+            if (resumed && data.contains("checkpoint") && data["checkpoint"].is_object()) {
+                const auto& cp = data["checkpoint"];
+                s.job_resumed_driven_distance_km = static_cast<float>(SafeJsonDouble(cp, "drivenDistanceKm", 0.0));
+                s.job_fuel_consumed_liters = static_cast<float>(SafeJsonDouble(cp, "fuelUsedLiters", 0.0));
+                s.job_max_speed_kmh = static_cast<float>(SafeJsonDouble(cp, "maxSpeedKmh", 0.0));
+                s.job_accum_vehicle_damage = static_cast<float>(SafeJsonDouble(cp, "accumVehicleDamage", 0.0));
+                s.job_accum_trailer_damage = static_cast<float>(SafeJsonDouble(cp, "accumTrailerDamage", 0.0));
+                s.job_accum_cargo_damage = static_cast<float>(SafeJsonDouble(cp, "accumCargoDamage", 0.0));
+                if (SafeJsonBool(cp, "hardcoreDisqualified", false)) {
+                    s.hardcore_disqualified = true;
+                    s.hardcore_disqualify_reason = SafeJsonString(cp, "hardcoreDisqualifyReason", "Disqualified in previous session");
+                }
+                if (cp.contains("fines") && cp["fines"].is_array()) {
+                    s.job_fines.clear();
+                    for (const auto& item : cp["fines"]) {
+                        if (item.is_object()) {
+                            std::string off = SafeJsonString(item, "offence", "unknown");
+                            int64_t amt = SafeJsonInt64(item, "amount", 0);
+                            s.job_fines.emplace_back(off, amt);
+                        }
+                    }
+                }
+                s.job_session_start_odometer_km = s.odometer_km;
+                s.job_driven_distance_km = s.job_resumed_driven_distance_km;
+            }
         });
     } else if (event_kind == "complete") {
         const std::string job_id = data.value("jobId", "");
@@ -847,6 +1103,182 @@ void ApiClient::ExecuteJobPostWorker(
         // Refresh driver penalty points
         SyncAccountAsync();
     }
+    } catch (...) {}
+}
+
+void ApiClient::ExecuteJobCheckpointWorker(std::string endpoint, std::string json_body) {
+    struct ScopeGuard {
+        std::atomic<bool>& flag;
+        ~ScopeGuard() { flag.store(false); }
+    } guard{is_checkpointing_};
+
+    try {
+        const auto cfg = ConfigManager::Instance().GetConfig();
+        if (cfg.driver_token.empty() || cfg.api_base_url.empty()) return;
+
+        const std::string full_url = cfg.api_base_url + endpoint;
+        const std::wstring wide_url = Utf8ToWide(full_url);
+
+        URL_COMPONENTS url_comp{};
+        url_comp.dwStructSize = sizeof(url_comp);
+        wchar_t host_name[256] = {0};
+        wchar_t url_path[1024] = {0};
+        url_comp.lpszHostName = host_name;
+        url_comp.dwHostNameLength = 256;
+        url_comp.lpszUrlPath = url_path;
+        url_comp.dwUrlPathLength = 1024;
+
+        if (!WinHttpCrackUrl(wide_url.c_str(), static_cast<DWORD>(wide_url.size()), 0, &url_comp)) {
+            return;
+        }
+
+        HINTERNET h_session = WinHttpOpen(
+            L"NismaraTracker/1.0 (Windows x64; Checkpoint)",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS,
+            0);
+        if (!h_session) return;
+
+        WinHttpSetTimeouts(h_session, 3000, 3000, 5000, 5000);
+
+        HINTERNET h_connect = WinHttpConnect(h_session, host_name, url_comp.nPort, 0);
+        if (!h_connect) {
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        const DWORD request_flags = (url_comp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET h_request = WinHttpOpenRequest(
+            h_connect,
+            L"POST",
+            url_path,
+            nullptr,
+            WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            request_flags);
+
+        if (!h_request) {
+            WinHttpCloseHandle(h_connect);
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        std::wstring headers = L"Content-Type: application/json\r\n";
+        headers += L"Authorization: Bearer " + Utf8ToWide(cfg.driver_token) + L"\r\n";
+        headers += L"X-Plugin-Version: 1.0.3-beta\r\n";
+
+        BOOL send_ok = WinHttpSendRequest(
+            h_request,
+            headers.c_str(),
+            static_cast<DWORD>(headers.size()),
+            const_cast<char*>(json_body.data()),
+            static_cast<DWORD>(json_body.size()),
+            static_cast<DWORD>(json_body.size()),
+            0);
+
+        if (send_ok && WinHttpReceiveResponse(h_request, nullptr)) {
+            DWORD status_code = 0;
+            DWORD status_size = sizeof(status_code);
+            WinHttpQueryHeaders(
+                h_request,
+                WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                WINHTTP_HEADER_NAME_BY_INDEX,
+                &status_code,
+                &status_size,
+                WINHTTP_NO_HEADER_INDEX);
+
+            if (status_code == 200) {
+                TelemetryState::Instance().Write([](TelemetrySnapshot& s) {
+                    s.checkpoint_status = "Tersimpan di Cloud";
+                    s.checkpoint_status_timer = 5.0f;
+                });
+            }
+        }
+
+        WinHttpCloseHandle(h_request);
+        WinHttpCloseHandle(h_connect);
+        WinHttpCloseHandle(h_session);
+    } catch (...) {}
+}
+
+void ApiClient::ExecuteLiveTelemetryWorker(std::string endpoint, std::string json_body) {
+    struct ScopeGuard {
+        std::atomic<bool>& flag;
+        ~ScopeGuard() { flag.store(false); }
+    } guard{is_posting_live_};
+
+    try {
+        const auto cfg = ConfigManager::Instance().GetConfig();
+        if (cfg.driver_token.empty() || cfg.api_base_url.empty()) return;
+
+        const std::string full_url = cfg.api_base_url + endpoint;
+        const std::wstring wide_url = Utf8ToWide(full_url);
+
+        URL_COMPONENTS url_comp{};
+        url_comp.dwStructSize = sizeof(url_comp);
+        wchar_t host_name[256] = {0};
+        wchar_t url_path[1024] = {0};
+        url_comp.lpszHostName = host_name;
+        url_comp.dwHostNameLength = 256;
+        url_comp.lpszUrlPath = url_path;
+        url_comp.dwUrlPathLength = 1024;
+
+        if (!WinHttpCrackUrl(wide_url.c_str(), static_cast<DWORD>(wide_url.size()), 0, &url_comp)) {
+            return;
+        }
+
+        HINTERNET h_session = WinHttpOpen(
+            L"NismaraTracker/1.0 (Windows x64; Live GPS)",
+            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+            WINHTTP_NO_PROXY_NAME,
+            WINHTTP_NO_PROXY_BYPASS,
+            0);
+        if (!h_session) return;
+
+        // Very fast timeouts for live GPS ping
+        WinHttpSetTimeouts(h_session, 2000, 2000, 3000, 3000);
+
+        HINTERNET h_connect = WinHttpConnect(h_session, host_name, url_comp.nPort, 0);
+        if (!h_connect) {
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        const DWORD request_flags = (url_comp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        HINTERNET h_request = WinHttpOpenRequest(
+            h_connect,
+            L"POST",
+            url_path,
+            nullptr,
+            WINHTTP_NO_REFERER,
+            WINHTTP_DEFAULT_ACCEPT_TYPES,
+            request_flags);
+
+        if (!h_request) {
+            WinHttpCloseHandle(h_connect);
+            WinHttpCloseHandle(h_session);
+            return;
+        }
+
+        std::wstring headers = L"Content-Type: application/json\r\n";
+        headers += L"Authorization: Bearer " + Utf8ToWide(cfg.driver_token) + L"\r\n";
+        headers += L"X-Plugin-Version: 1.0.3-beta\r\n";
+
+        WinHttpSendRequest(
+            h_request,
+            headers.c_str(),
+            static_cast<DWORD>(headers.size()),
+            const_cast<char*>(json_body.data()),
+            static_cast<DWORD>(json_body.size()),
+            static_cast<DWORD>(json_body.size()),
+            0);
+
+        WinHttpReceiveResponse(h_request, nullptr);
+
+        WinHttpCloseHandle(h_request);
+        WinHttpCloseHandle(h_connect);
+        WinHttpCloseHandle(h_session);
     } catch (...) {}
 }
 
@@ -1274,6 +1706,32 @@ void ApiClient::ExecuteSyncWorker(
                 if (!oj_src.empty()) s.origin_city = oj_src;
                 if (!oj_dst.empty()) s.destination_city = oj_dst;
                 if (!oj_cargo.empty()) s.cargo_name = oj_cargo;
+
+                if (oj.contains("checkpoint") && oj["checkpoint"].is_object()) {
+                    const auto& cp = oj["checkpoint"];
+                    s.job_resumed_driven_distance_km = static_cast<float>(SafeJsonDouble(cp, "drivenDistanceKm", 0.0));
+                    s.job_fuel_consumed_liters = static_cast<float>(SafeJsonDouble(cp, "fuelUsedLiters", 0.0));
+                    s.job_max_speed_kmh = static_cast<float>(SafeJsonDouble(cp, "maxSpeedKmh", 0.0));
+                    s.job_accum_vehicle_damage = static_cast<float>(SafeJsonDouble(cp, "accumVehicleDamage", 0.0));
+                    s.job_accum_trailer_damage = static_cast<float>(SafeJsonDouble(cp, "accumTrailerDamage", 0.0));
+                    s.job_accum_cargo_damage = static_cast<float>(SafeJsonDouble(cp, "accumCargoDamage", 0.0));
+                    if (SafeJsonBool(cp, "hardcoreDisqualified", false)) {
+                        s.hardcore_disqualified = true;
+                        s.hardcore_disqualify_reason = SafeJsonString(cp, "hardcoreDisqualifyReason", "Disqualified in previous session");
+                    }
+                    if (cp.contains("fines") && cp["fines"].is_array()) {
+                        s.job_fines.clear();
+                        for (const auto& item : cp["fines"]) {
+                            if (item.is_object()) {
+                                std::string off = SafeJsonString(item, "offence", "unknown");
+                                int64_t amt = SafeJsonInt64(item, "amount", 0);
+                                s.job_fines.emplace_back(off, amt);
+                            }
+                        }
+                    }
+                    s.job_session_start_odometer_km = s.odometer_km;
+                    s.job_driven_distance_km = s.job_resumed_driven_distance_km;
+                }
             });
         }
     }

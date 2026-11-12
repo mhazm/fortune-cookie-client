@@ -629,6 +629,37 @@ Fase ini menyelesaikan 5 issue kritis yang ditemukan selama masa pengujian Close
      - **ATS (`amtrucks` / `gameId: 2`)**: Real Miles $\le 80\text{ mph}$ ($128.75\text{ km/h}$), Race Miles $81 - 130\text{ mph}$ ($209.2\text{ km/h}$), Invalid $> 130\text{ mph}$ ($209.2\text{ km/h}$).
    - Menyimpan field `game` dan `gameId` pada setiap dokumen `jobhistories` agar pencatatan job antar-kedua simulator terpisah bersih dan adil.
 
+### Phase 17: Multi-Session Job Checkpoint Persistence, Redis In-Memory Live Fleet Tracking & Breadcrumb Route Recording
+Fase ini mengimplementasikan persistensi checkpoint lintas-sesi yang tahan banting terhadap crash, pelacakan armada live GPS via Redis, dan perekaman jejak rute visual (*breadcrumb polyline*) untuk website `nismara-logistics`:
+
+1. **Persistensi Checkpoint Lintas-Sesi & Pemulihan Metrik**:
+   - **Tahan Banting Crash (Dual-Trigger & SEH Flush)**:
+     - Checkpoint otomatis dipicu saat truk berhenti/parkir (`speed < 0.5 km/h` + rem tangan/mesin mati/pause, dengan debounce 30s) atau saat melaju terus-menerus di jalan tol setiap 3–5 menit (*periodic heartbeat autosave*).
+     - Hook `SetUnhandledExceptionFilter(NismaraCrashHandler)` dipasang di `dllmain.cpp` untuk melakukan *emergency synchronous flush* ke server saat proses game mengalami *Crash to Desktop (CTD)*.
+     - Live GPS ping setiap 3–5 detik ke Redis bertindak sebagai *safety net* sekunder yang menyimpan metrik terkini 3 detik sebelum crash terjadi.
+   - **Isolasi Penuh Odometer Armada vs In-Game Truck**:
+     - Metrik perjalanan kargo diukur secara murni menggunakan `drivenDistanceKm` yang dimulai dari $0\text{ km}$ pada setiap kontrak baru.
+     - `fleet.odometer` di database MongoDB bertambah secara akumulatif hanya melalui penutupan job resmi di server (`processJobComplete`), sehingga kepemilikan armada di database tidak rancu saat pemain menggunakan beberapa truk, profile ganda, atau membeli truk bekas (*used truck*).
+   - **Hidrasi Sesi Otomatis**:
+     - Endpoint `/api/tracker/me` dan `/api/tracker/jobs/start` (resumed) mengembalikan sub-dokumen `checkpoint` (`drivenDistanceKm`, `fuelUsedLiters`, `maxSpeedKmh`, `fines`, `accumVehicleDamage`, `accumTrailerDamage`, `accumCargoDamage`, `durationSeconds`, `lastPosX`, `lastPosZ`, `hardcoreDisqualified`).
+     - Plugin C++ secara otomatis memulihkan seluruh metrik tersebut ke `TelemetrySnapshot` dan melanjutkan perhitungan jarak: $\text{Total Driven} = \text{job\_resumed\_driven\_distance\_km} + (\text{odometer\_saat\_ini} - \text{odometer\_saat\_reload})$.
+     - Di `DispatchApp.tsx`, waybill menampilkan badge status `[JOB #... - DILANJUTKAN]` dan status cloud checkpoint `☁ Tersimpan di Cloud`.
+
+2. **Dedicated Redis In-Memory Store & Endpoint Livemap**:
+   - Client Redis (`ioredis`) dihubungkan di `src/config/redis.js` dengan konfigurasi `REDIS_URL` dari `.env`.
+   - **Fallback Cerdas In-Memory Map**: Jika service Redis offline/tidak tersedia saat *local development*, server otomatis menggunakan fallback native JS `Map()` dengan auto-pruning TTL 30 detik tanpa membuat backend mogok atau melempar eksepsi unhandled.
+   - **Endpoint Live Telemetry**:
+     - `POST /api/tracker/telemetry/live`: Menerima koordinat live kilat dari plugin setiap 3 detik (`x, y, z, speed, heading, gear, drivenDistanceKm, isPaused, serverType`) dan menyimpannya ke Redis Hash/String dengan TTL 30 detik.
+     - `GET /api/tracker/telemetry/live-map`: Mengembalikan seluruh armada yang sedang aktif bermain (dapat difilter per `gameId`: ETS2 vs ATS) untuk dirender di peta live website `nismara-logistics`.
+     - `POST /api/tracker/jobs/checkpoint`: Meng-update sub-dokumen `checkpoint` dan melakukan append `$push: { routePath: { $each: newRoutePoints } }` pada job `ONGOING`.
+
+3. **Perekaman Jejak Rute (Breadcrumb Polyline Sampler)**:
+   - Selama truk mengangkut kargo (`job_active`), `OnChannelWorldPlacement` melakukan sampling titik koordinat baru jika jarak Euclidean dari titik terakhir $\ge 300\text{ meter}$, atau perubahan sudut belok (*heading*) $\ge 15^\circ$ (saat jarak $\ge 50\text{ meter}$).
+   - Setiap titik direkam ringkas dalam format `{ int32_t x, int32_t z, uint8_t spd }`.
+   - Titik-titik baru dikirim secara berkala via checkpoint dan seluruh jejak utuh dikirimkan saat `job_delivered` ke `POST /api/tracker/jobs/complete` untuk disimpan permanen di MongoDB `jobhistories.routePath` (dibatasi maksimum 15.000 titik per perjalanan untuk efisiensi penyimpanan).
+
+---
+
 ## 6. Konteks Produksi Skala Besar (~300+ Pengguna), Cross-Platform, & Server 24/7 (PRIORITAS UTAMA!)
 
 Proyek ini digunakan oleh sekitar **300+ pengemudi aktif VTC Nismara Transport** dengan spesifikasi perangkat, sistem operasi, dan struktur penyimpanan yang sangat beragam. Seluruh desain dan kode di `nismara-tracker`, `nismara-companion`, dan `nismara-tracker-server` **WAJIB** mematuhi tiga pilar produksi berikut:
@@ -788,8 +819,14 @@ Jalankan perintah berikut dari direktori `D:\Project\Nismara Transport\Project\n
 - **DO**: Selalu verifikasi keberadaan fisik file runtime Ultralight (`std::filesystem::exists`) dan uji muat (`LoadLibraryW`) sebelum memanggil API Ultralight C++ pada `WebSurfaceBridge`, agar jika runtime hilang di komputer pengguna, plugin otomatis *fallback* ke ImGui Phone OS tanpa melempar SEH exception (`0xC06D007E`) yang mematikan game.
 - **DO**: Pisahkan deteksi cheat waktu (*speedhack/warp*) dari deteksi cheat relokasi fisik (*kamera 0/goto/towing*). Gunakan `player.use.ferry` dan `player.use.train` dari SCS SDK untuk menandai transit legal, dan gunakan lompatan waktu diskret $\ge 10\text{ menit}$ untuk tidur (8–12+ jam) tanpa timer stopwatch dunia nyata agar performa loading HDD tidak memicu false positive.
 - **DO**: Deteksi kamera 0 / teleportasi menggunakan perpindahan koordinat fisik 2D Euclidean ($\Delta d > 300\text{ m}$ dan $v > 360\text{ km/h}$) di `OnChannelWorldPlacement`. Kamera 0 sama sekali tidak mengubah laju jam in-game, sehingga pelacakan koordinat adalah satu-satunya metode andal untuk menangkapnya.
+- **DO**: Selalu hitung progres pengiriman kargo dan checkpoint menggunakan `drivenDistanceKm` yang dimulai dari $0\text{ km}$ pada setiap kontrak baru, dan pisahkan secara mutlak dari odometer fisik truk in-game. Odometer armada (`fleet.odometer`) di database MongoDB bertambah secara akumulatif hanya melalui penutupan job resmi di server (`processJobComplete`), sehingga kepemilikan armada di database tidak rancu saat pemain menggunakan beberapa truk, profile ganda, atau membeli truk bekas (*used truck*).
+- **DO**: Terapkan mekanisme *dual-trigger* dan *crash filter hook* pada persistensi checkpoint: (1) pemicu saat truk berhenti/parkir (`speed < 0.5 km/h` + rem tangan/mesin mati/pause, dengan debounce 30s), (2) pemicu *heartbeat autosave* berkala setiap 3–5 menit saat berkendara terus-menerus di jalan tol, (3) `SetUnhandledExceptionFilter` untuk *emergency flush* saat terjadi *Crash to Desktop (CTD)*, serta (4) *safety net* live GPS ping ke Redis setiap 3–5 detik yang merekam snapshot 3 detik sebelum crash.
+- **DO**: Sediakan fallback cerdas *In-Memory Map Store* pada koneksi Redis backend (`src/config/redis.js`) dengan TTL otomatis 30 detik. Backend harus dapat berjalan 100% mulus baik saat Redis aktif di VPS maupun saat offline development tanpa service Redis.
+- **DO**: Lakukan sampling koordinat jejak rute (*breadcrumb polyline*) pada interval jarak Euclidean $\ge 300\text{ meter}$ atau perubahan arah (*heading*) $\ge 15^\circ$ saat kecepatan $\ge 50\text{ meter}$, dan batasi array polyline maksimal 15.000 titik per job agar ukuran dokumen MongoDB tetap ringkas (<200 KB) dan performa livemap web `nismara-logistics` tetap optimal.
 
 ### DON'T (Yang Dilarang Dilakukan)
+- **DON'T**: **Jangan pernah** menggunakan odometer fisik truk in-game (`odometer_km`) sebagai acuan servis armada atau meng-overwrite `fleet.odometer` di MongoDB langsung dari nilai game. Nilai in-game bisa melompat akibat pembelian truk bekas (500k km) atau bermain di profile offline, yang akan merusak integritas database armada VTC.
+- **DON'T**: **Jangan pernah** melakukan request jaringan HTTP/WinHTTP synchronous di dalam thread utama game (DirectX `Present` atau callback SCS Telemetry) kecuali pada *emergency crash filter hook*. Selalu gunakan worker background thread (`ApiClient`) agar FPS game tidak tersendat (*stutter-free*).
 - **DON'T**: **Jangan pernah** memasang hook pada `IDirectInput8W::CreateDevice` (VTable index `3`) di `src/hooks/wndproc_hook.cpp`! Hooking `CreateDevice` akan menyebabkan game langsung **CRASH** ketika pengguna mencolokkan perangkat Joystick, Steering Wheel, atau Gamepad saat bermain. Hanya pasang hook pada `GetDeviceState` (index `9`) dan `GetDeviceData` (index `10`) pada device `GUID_SysMouse`.
 - **DON'T**: **Jangan pernah** memaksa atau meng-hardcode nomor lambung truk (`fleet_number` seperti `NL-074`) apabila `has_matched_fleet == false`. Jika truk yang dipakai di game tidak cocok dengan daftar kepemilikan `fleets` user, truk tersebut adalah **Truk Sewa (`SEWA` / `[UNREGISTERED]`)**.
 - **DON'T**: **Jangan pernah** membaca atau menebak truk aktif dari `game.log.txt`. Identitas truk wajib berasal 100% dari callback `SCS_TELEMETRY_EVENT_configuration` (`"truck"`) pada SCS Telemetry SDK.

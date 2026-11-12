@@ -8,6 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "core/telemetry_state.hpp"
+
 namespace nismara::core {
 
 struct JobStartRequest {
@@ -78,6 +80,40 @@ struct JobCompleteRequest {
     std::string vehicle_in_game_id{};
     std::string fleet_number{};
     std::vector< std::pair<std::string, int64_t> > fines{};
+    std::vector<RoutePoint> route_path{};
+};
+
+struct JobCheckpointRequest {
+    std::string job_id{};
+    std::string game_id{"1"};
+    double driven_distance_km{0.0};
+    double fuel_used_liters{0.0};
+    float max_speed_kmh{0.0f};
+    std::vector< std::pair<std::string, int64_t> > fines{};
+    float accum_vehicle_damage{0.0f};
+    float accum_trailer_damage{0.0f};
+    float accum_cargo_damage{0.0f};
+    int64_t duration_seconds{0};
+    double last_pos_x{0.0};
+    double last_pos_y{0.0};
+    double last_pos_z{0.0};
+    bool hardcore_disqualified{false};
+    std::string hardcore_disqualify_reason{};
+    std::vector<RoutePoint> new_route_points{};
+};
+
+struct LiveTelemetryRequest {
+    std::string game_id{"1"};
+    std::string fleet_number{};
+    double x{0.0};
+    double y{0.0};
+    double z{0.0};
+    float speed{0.0f};
+    float heading{0.0f};
+    int32_t gear{0};
+    double driven_distance_km{0.0};
+    bool is_paused{false};
+    std::string server_type{"Singleplayer"};
 };
 
 struct JobCancelRequest {
@@ -112,6 +148,21 @@ public:
      * @brief Submits a job completion event (POST /api/tracker/jobs/complete) on a background worker thread.
      */
     void PostJobCompleteAsync(const JobCompleteRequest& req);
+
+    /**
+     * @brief Submits a mid-trip checkpoint event (POST /api/tracker/jobs/checkpoint) on a background worker thread.
+     */
+    void PostJobCheckpointAsync(const JobCheckpointRequest& req);
+
+    /**
+     * @brief Submits a lightweight live telemetry GPS ping (POST /api/tracker/telemetry/live) on a background worker thread.
+     */
+    void PostLiveTelemetryAsync(const LiveTelemetryRequest& req);
+
+    /**
+     * @brief Performs an emergency synchronous checkpoint flush upon game crash or unhandled exception.
+     */
+    void EmergencyFlushCheckpoint();
 
     /**
      * @brief Submits a job cancellation event (POST /api/tracker/jobs/cancel) on a background worker thread.
@@ -168,6 +219,8 @@ private:
 
     void ExecuteSyncWorker(std::string base_url, std::string token, std::string steam_id, std::string game_id);
     void ExecuteJobPostWorker(std::string endpoint, std::string json_body, std::string event_kind);
+    void ExecuteJobCheckpointWorker(std::string endpoint, std::string json_body);
+    void ExecuteLiveTelemetryWorker(std::string endpoint, std::string json_body);
     void ExecutePointsWorker(std::string endpoint, std::string json_body, std::string action_type);
     void ExecuteWallpaperDownloadWorker(std::string url, bool apply_lockscreen, bool apply_homescreen);
     void SetWallpaperStatus(const std::string& msg);
@@ -175,11 +228,15 @@ private:
     std::mutex thread_mutex_;
     std::thread worker_thread_{};
     std::thread job_thread_{};
+    std::thread checkpoint_thread_{};
+    std::thread live_telemetry_thread_{};
     std::thread points_thread_{};
     std::thread wallpaper_thread_{};
     mutable std::mutex status_mutex_;
     std::string wallpaper_status_{};
     std::atomic<bool> is_syncing_{false};
+    std::atomic<bool> is_checkpointing_{false};
+    std::atomic<bool> is_posting_live_{false};
     std::atomic<bool> is_downloading_wallpaper_{false};
     std::atomic<bool> shutting_down_{false};
 };

@@ -5,10 +5,21 @@
 #include "core/config_manager.hpp"
 #include "hooks/dx11_hook.hpp"
 
+namespace {
+
+LONG WINAPI NismaraCrashHandler(EXCEPTION_POINTERS* /*pExceptionInfo*/) {
+    // Attempt emergency synchronous checkpoint dispatch before Windows terminates the process
+    nismara::core::ApiClient::Instance().EmergencyFlushCheckpoint();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+} // namespace
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
         case DLL_PROCESS_ATTACH: {
             DisableThreadLibraryCalls(hModule);
+            SetUnhandledExceptionFilter(NismaraCrashHandler);
 
             // Register Companion Ultralight runtime directory into Windows DLL search path
             // so MSVC Delay-Load resolves Ultralight.dll, WebCore.dll, etc. directly from %LOCALAPPDATA%

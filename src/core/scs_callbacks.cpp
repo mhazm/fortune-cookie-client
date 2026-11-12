@@ -305,8 +305,22 @@ SCSAPI_VOID OnChannelOdometer(
     }
     const float odo = value->value_float.value;
     nismara::core::TelemetryState::Instance().Write([odo](nismara::core::TelemetrySnapshot& s) {
-        if (s.job_active && s.job_start_odometer_km <= 0.0f && odo > 0.0f) {
-            s.job_start_odometer_km = odo;
+        if (s.job_active || !s.active_job_db_id.empty()) {
+            if (s.job_session_start_odometer_km <= 0.0f && odo > 0.0f) {
+                s.job_session_start_odometer_km = odo;
+            }
+            if (s.job_start_odometer_km <= 0.0f && odo > 0.0f) {
+                s.job_start_odometer_km = odo;
+            }
+
+            if (s.job_resumed_driven_distance_km > 0.0f) {
+                const float session_dist = (odo > s.job_session_start_odometer_km)
+                                               ? (odo - s.job_session_start_odometer_km)
+                                               : 0.0f;
+                s.job_driven_distance_km = s.job_resumed_driven_distance_km + session_dist;
+            } else if (s.job_start_odometer_km > 0.0f && odo > s.job_start_odometer_km) {
+                s.job_driven_distance_km = (odo - s.job_start_odometer_km);
+            }
         }
         s.odometer_km = odo;
     });
@@ -600,6 +614,30 @@ SCSAPI_VOID OnChannelWorldPlacement(
                 g_last_pos_y = placement.position.y;
                 g_last_pos_z = placement.position.z;
                 g_last_pos_sample_time = now;
+            }
+
+            // Perekaman Jejak Rute (Breadcrumb Polyline Sampler)
+            if (has_active_delivery && !s.is_paused) {
+                const double r_dx = placement.position.x - s.route_last_recorded_x;
+                const double r_dz = placement.position.z - s.route_last_recorded_z;
+                const double r_dist_m = std::sqrt(r_dx * r_dx + r_dz * r_dz);
+                float h_diff = std::abs(heading_deg - s.route_last_recorded_heading);
+                if (h_diff > 180.0f) h_diff = 360.0f - h_diff;
+
+                if (!s.route_has_initial_point || r_dist_m >= 300.0 || (r_dist_m >= 50.0 && h_diff >= 15.0f)) {
+                    nismara::core::RoutePoint pt;
+                    pt.x = static_cast<int32_t>(std::round(placement.position.x));
+                    pt.z = static_cast<int32_t>(std::round(placement.position.z));
+                    pt.spd = static_cast<uint8_t>(std::clamp(static_cast<int>(s.speed_kmh), 0, 255));
+
+                    s.job_route_points.push_back(pt);
+                    s.job_pending_route_points.push_back(pt);
+
+                    s.route_last_recorded_x = placement.position.x;
+                    s.route_last_recorded_z = placement.position.z;
+                    s.route_last_recorded_heading = heading_deg;
+                    s.route_has_initial_point = true;
+                }
             }
         });
 }
@@ -895,6 +933,98 @@ SCSAPI_VOID OnTelemetryFrameStart(
             }
         }
     });
+
+    // Live GPS Ping to Redis / API (every 3 seconds while driving in-world)
+    static auto last_live_ping_time = std::chrono::steady_clock::now();
+    const float ping_dt = std::chrono::duration<float>(now - last_live_ping_time).count();
+    if (ping_dt >= 3.0f) {
+        last_live_ping_time = now;
+        const auto snap = nismara::core::TelemetryState::Instance().GetSnapshot();
+        if (snap.is_driving_in_world && !snap.truck_in_game_id.empty()) {
+            const auto acc = nismara::core::TelemetryState::Instance().GetDriverAccount();
+            std::string fleet_num;
+            if (acc.active_fleet_index >= 0 && acc.active_fleet_index < static_cast<int>(acc.fleets.size())) {
+                fleet_num = acc.fleets[acc.active_fleet_index].fleet_number;
+            }
+
+            nismara::core::LiveTelemetryRequest live_req;
+            live_req.game_id = (snap.game_id == "ats" || snap.game_id == "amtrucks") ? "2" : "1";
+            live_req.fleet_number = fleet_num;
+            live_req.x = snap.pos_x;
+            live_req.y = snap.pos_y;
+            live_req.z = snap.pos_z;
+            live_req.speed = snap.speed_kmh;
+            live_req.heading = snap.heading_deg;
+            live_req.gear = snap.current_gear;
+            live_req.driven_distance_km = snap.job_driven_distance_km;
+            live_req.is_paused = snap.is_paused;
+            live_req.server_type = snap.server_mode;
+
+            nismara::core::ApiClient::Instance().PostLiveTelemetryAsync(live_req);
+        }
+    }
+
+    // Checkpoint Trigger (Truck stopped OR 3-minute continuous highway driving autosave)
+    static auto last_checkpoint_time = std::chrono::steady_clock::now();
+    const float cp_dt = std::chrono::duration<float>(now - last_checkpoint_time).count();
+    const auto snap_for_cp = nismara::core::TelemetryState::Instance().GetSnapshot();
+    const bool has_delivery = snap_for_cp.job_active && !snap_for_cp.active_job_db_id.empty();
+
+    if (has_delivery) {
+        const bool is_stopped = (snap_for_cp.speed_kmh < 0.5f) &&
+                                (snap_for_cp.parking_brake || !snap_for_cp.engine_running || snap_for_cp.is_paused);
+        const float dist_since_last_cp = snap_for_cp.job_driven_distance_km - snap_for_cp.last_checkpoint_driven_distance_km;
+
+        const bool trigger_stopped = is_stopped && (cp_dt >= 30.0f) && (dist_since_last_cp >= 0.5f);
+        const bool trigger_autosave = (cp_dt >= 180.0f) && (dist_since_last_cp >= 2.0f);
+
+        if (trigger_stopped || trigger_autosave) {
+            last_checkpoint_time = now;
+
+            nismara::core::JobCheckpointRequest cp_req;
+            cp_req.job_id = snap_for_cp.active_job_db_id;
+            cp_req.game_id = (snap_for_cp.game_id == "ats" || snap_for_cp.game_id == "amtrucks") ? "2" : "1";
+            cp_req.driven_distance_km = snap_for_cp.job_driven_distance_km;
+            cp_req.fuel_used_liters = snap_for_cp.job_fuel_consumed_liters;
+            cp_req.max_speed_kmh = std::max(snap_for_cp.job_max_speed_kmh, snap_for_cp.speed_kmh);
+            cp_req.fines = snap_for_cp.job_fines;
+            cp_req.accum_vehicle_damage = snap_for_cp.job_accum_vehicle_damage;
+            cp_req.accum_trailer_damage = snap_for_cp.job_accum_trailer_damage;
+            cp_req.accum_cargo_damage = snap_for_cp.job_accum_cargo_damage;
+
+            const int64_t now_sec = static_cast<int64_t>(std::time(nullptr));
+            cp_req.duration_seconds = (snap_for_cp.job_start_timestamp_sec > 0 && now_sec > snap_for_cp.job_start_timestamp_sec)
+                                          ? (now_sec - snap_for_cp.job_start_timestamp_sec)
+                                          : 60;
+            cp_req.last_pos_x = snap_for_cp.pos_x;
+            cp_req.last_pos_y = snap_for_cp.pos_y;
+            cp_req.last_pos_z = snap_for_cp.pos_z;
+            cp_req.hardcore_disqualified = snap_for_cp.hardcore_disqualified;
+            cp_req.hardcore_disqualify_reason = snap_for_cp.hardcore_disqualify_reason;
+            cp_req.new_route_points = snap_for_cp.job_pending_route_points;
+
+            nismara::core::ApiClient::Instance().PostJobCheckpointAsync(cp_req);
+
+            nismara::core::TelemetryState::Instance().Write([now_sec](nismara::core::TelemetrySnapshot& s) {
+                s.last_checkpoint_driven_distance_km = s.job_driven_distance_km;
+                s.last_checkpoint_time_sec = static_cast<float>(now_sec);
+                s.job_pending_route_points.clear();
+                s.checkpoint_status = "Menyimpan Checkpoint...";
+                s.checkpoint_status_timer = 5.0f;
+            });
+        }
+    }
+
+    if (snap_for_cp.checkpoint_status_timer > 0.0f) {
+        nismara::core::TelemetryState::Instance().Write([](nismara::core::TelemetrySnapshot& s) {
+            if (s.checkpoint_status_timer > 0.0f) {
+                s.checkpoint_status_timer -= 0.05f;
+                if (s.checkpoint_status_timer <= 0.0f) {
+                    s.checkpoint_status = "None";
+                }
+            }
+        });
+    }
 }
 
 SCSAPI_VOID OnTelemetryPause(
@@ -1289,7 +1419,9 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             comp_req.game_mode = MapServerModeToGameMode(s.server_mode);
 
             uint32_t driven_km = 0;
-            if (event_dist_km > 0.5f) {
+            if (s.job_driven_distance_km > 0.5f) {
+                driven_km = static_cast<uint32_t>(std::round(s.job_driven_distance_km));
+            } else if (event_dist_km > 0.5f) {
                 driven_km = static_cast<uint32_t>(std::round(event_dist_km));
             } else if (s.job_start_odometer_km > 0.0f && s.odometer_km > s.job_start_odometer_km) {
                 driven_km = static_cast<uint32_t>(std::round(s.odometer_km - s.job_start_odometer_km));
@@ -1381,8 +1513,18 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             comp_req.vehicle_in_game_id = s.truck_in_game_id;
             comp_req.fleet_number = matched_fleet_number;
             comp_req.fines = s.job_fines;
+            comp_req.route_path = s.job_route_points;
 
             s.job_active = false;
+            s.active_job_db_id.clear();
+            s.job_route_points.clear();
+            s.job_pending_route_points.clear();
+            s.route_has_initial_point = false;
+            s.job_resumed_driven_distance_km = 0.0f;
+            s.job_session_start_odometer_km = 0.0f;
+            s.job_driven_distance_km = 0.0f;
+            s.last_checkpoint_driven_distance_km = 0.0f;
+            s.checkpoint_status = "None";
             s.last_job_status = "Contract Completed (job_finished)";
         });
 
@@ -1398,6 +1540,15 @@ SCSAPI_VOID OnTelemetryGameplayEvent(
             cancel_req.job_id = s.active_job_db_id;
             cancel_req.game_id = (s.game_id == "ats" || s.game_id == "amtrucks") ? "2" : "1";
             s.job_active = false;
+            s.active_job_db_id.clear();
+            s.job_route_points.clear();
+            s.job_pending_route_points.clear();
+            s.route_has_initial_point = false;
+            s.job_resumed_driven_distance_km = 0.0f;
+            s.job_session_start_odometer_km = 0.0f;
+            s.job_driven_distance_km = 0.0f;
+            s.last_checkpoint_driven_distance_km = 0.0f;
+            s.checkpoint_status = "None";
             s.last_job_status = "Contract Aborted (job_cancelled)";
         });
         if (nismara::core::IsCompanionAppRunning()) {

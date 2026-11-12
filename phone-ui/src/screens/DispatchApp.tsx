@@ -517,6 +517,21 @@ export const DispatchApp: React.FC<Props> = ({ telemetry, onBack }) => {
                           DILANJUTKAN
                         </span>
                       )}
+                      {telemetry.checkpoint_status && telemetry.checkpoint_status !== 'None' && (
+                        <span
+                          style={{
+                            fontSize: 9,
+                            fontWeight: 700,
+                            padding: '2px 6px',
+                            borderRadius: 5,
+                            backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                            color: '#34d399',
+                            border: '1px solid rgba(16, 185, 129, 0.4)',
+                          }}
+                        >
+                          ☁ {telemetry.checkpoint_status}
+                        </span>
+                      )}
                       {telemetry.is_special_job && (
                         <span
                           style={{
