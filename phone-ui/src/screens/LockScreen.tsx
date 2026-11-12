@@ -114,7 +114,7 @@ export const LockScreen: React.FC<Props> = ({ telemetry, onUnlock }) => {
           <span>
             {telemetry.driver_name
               ? `${telemetry.driver_name}  |  Lv.${telemetry.level || 1}`
-              : `${telemetry.os_version || 'Nismara OS v1.0.1'}  |  Tap to Unlock`}
+              : `${telemetry.os_version || 'Nismara OS v1.0.2'}  |  Tap to Unlock`}
           </span>
         </div>
       </div>

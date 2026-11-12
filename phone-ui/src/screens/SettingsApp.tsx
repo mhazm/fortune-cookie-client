@@ -37,9 +37,9 @@ export const SettingsApp: React.FC<Props> = ({ telemetry, onBack }) => {
     : 'Belum Dikonfigurasi';
 
   const isAuth = telemetry.account_authenticated !== false && Boolean(telemetry.driver_name);
-  const osVersion = telemetry.os_version || 'Nismara OS v1.0.1';
-  const buildVersion = telemetry.build_version || 'Build 1.0.1-x64';
-  const pluginVersion = telemetry.plugin_version || '1.0.1';
+  const osVersion = telemetry.os_version || 'Nismara OS v1.0.2';
+  const buildVersion = telemetry.build_version || 'Build 1.0.2-x64';
+  const pluginVersion = telemetry.plugin_version || '1.0.2';
 
   // 9 Hardcore Simulation Parameters from ProfileValidator (tablet_gui.cpp:3415-3484)
   const hcChecks = [

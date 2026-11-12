@@ -522,7 +522,7 @@ Saat memodifikasi query atau skema di `nismara-tracker-server`, **WAJIB** mematu
 Bagian ini merangkum arsitektur final yang sudah 100% stabil agar model AI mana pun (termasuk Gemini Flash / Pro / Claude) **TIDAK melakukan improvisasi liar atau merusak sistem yang sudah berjalan**:
 
 1. **Identitas & Penamaan Resmi (`Companion Phone` & `Nismara OS`)**:
-   - Seluruh teks antarmuka pengguna di `phone-ui/` maupun `tablet_gui.cpp` **WAJIB** menggunakan nama perangkat **"Companion Phone"** dan sistem operasi **"Nismara OS"** (contoh: `Nismara OS v1.0.1`, `Build 1.0.1-x64`).
+   - Seluruh teks antarmuka pengguna di `phone-ui/` maupun `tablet_gui.cpp` **WAJIB** menggunakan nama perangkat **"Companion Phone"** dan sistem operasi **"Nismara OS"** (contoh: `Nismara OS v1.0.2`, `Build 1.0.2-x64`).
    - **DILARANG** menampilkan teks `"iPhone 16"` atau `"iOS 18"` di layar pengguna.
    - Versi plugin dan OS dikirim secara dinamis dari macro CMake `NISMARA_VERSION` (`CMakeLists.txt` $\rightarrow$ `src/ui/web_surface_bridge.cpp`), bukan di-hardcode manual.
 
@@ -677,9 +677,9 @@ npm run tauri build
 
 #### Output Berkas Installer Setup yang Dihasilkan:
 - **NSIS Setup Installer (`.exe` — Standar Distribusi Utama ke Driver)**:
-  `nismara-companion\src-tauri\target\release\bundle\nsis\Nismara Companion_1.0.1_x64-setup.exe` (~21.5 MB)
+  `nismara-companion\src-tauri\target\release\bundle\nsis\Nismara Companion_1.0.2_x64-setup.exe` (~21.5 MB)
 - **Windows Installer (`.msi`)**:
-  `nismara-companion\src-tauri\target\release\bundle\msi\Nismara Companion_1.0.1_x64_en-US.msi` (~29.5 MB)
+  `nismara-companion\src-tauri\target\release\bundle\msi\Nismara Companion_1.0.2_x64_en-US.msi` (~29.5 MB)
 
 Saat pengguna menjalankan installer tersebut, installer akan menempatkan seluruh dependensi (`NismaraTracker.dll`, `runtime/` Ultralight, dan `web-ui/` React 19) secara rapi dan otomatis ke dalam subfolder **`resources/`** (`%LOCALAPPDATA%\Nismara Companion\resources\`).
 

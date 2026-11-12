@@ -479,7 +479,7 @@ void ApiClient::ExecutePointsWorker(
 
     std::wstring headers = L"Content-Type: application/json\r\n";
     headers += L"Authorization: Bearer " + Utf8ToWide(cfg.driver_token) + L"\r\n";
-    headers += L"X-Plugin-Version: 1.0.1\r\n";
+    headers += L"X-Plugin-Version: 1.0.2\r\n";
 
     BOOL sent = WinHttpSendRequest(
         h_request,
@@ -629,7 +629,7 @@ void ApiClient::ExecuteJobPostWorker(
 
     std::wstring headers = L"Content-Type: application/json\r\n";
     headers += L"Authorization: Bearer " + Utf8ToWide(cfg.driver_token) + L"\r\n";
-    headers += L"X-Plugin-Version: 1.0.1\r\n";
+    headers += L"X-Plugin-Version: 1.0.2\r\n";
 
     BOOL send_ok = WinHttpSendRequest(
         h_request,
@@ -888,14 +888,14 @@ void ApiClient::ExecuteSyncWorker(
     nlohmann::json req_json = {
         {"token", token},
         {"gameId", game_id},
-        {"pluginVersion", "1.0.1"},
+        {"pluginVersion", "1.0.2"},
         {"steamId", steam_id}
     };
     const std::string body_str = req_json.dump();
 
     std::wstring headers = L"Content-Type: application/json\r\n";
     headers += L"Authorization: Bearer " + Utf8ToWide(token) + L"\r\n";
-    headers += L"X-Plugin-Version: 1.0.1\r\n";
+    headers += L"X-Plugin-Version: 1.0.2\r\n";
     if (!game_id.empty()) {
         headers += L"X-Game-Id: " + Utf8ToWide(game_id) + L"\r\n";
     }

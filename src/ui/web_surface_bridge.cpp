@@ -582,7 +582,7 @@ void WebSurfaceBridge::DispatchTelemetry() {
         j["driver_token"] = cfg.driver_token;
         j["api_base_url"] = cfg.api_base_url;
 #ifndef NISMARA_VERSION
-#define NISMARA_VERSION "1.0.1"
+#define NISMARA_VERSION "1.0.2"
 #endif
         j["plugin_version"] = NISMARA_VERSION;
         j["os_version"] = std::string("Nismara OS v") + NISMARA_VERSION;
